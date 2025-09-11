@@ -90,6 +90,49 @@ class HeartbeatMessage(BaseModel):
     type: Literal["hb"] = "hb"
     from_: str = Field(..., alias="from")
 
+
+# ---------------------------------------------------------------------------
+# Request models for REST endpoints
+
+
+class ModeRequest(BaseModel):
+    mode: Literal["AUTO", "MANUAL"]
+
+
+class CommandRequest(BaseModel):
+    cmd: Literal["PUMP_ON", "PUMP_OFF"]
+
+
+class PulseRateRequest(BaseModel):
+    pulse_rate: float
+
+    @validator("pulse_rate")
+    def pulse_range(cls, v: float) -> float:
+        if v < 0.02 or v > 3.0:
+            raise ValueError("pulse_rate out of range (0.02 - 3.0)")
+        return v
+
+
+class ConfigUpdate(BaseModel):
+    empty_tanque_mm: Optional[float] = None
+    full_tanque_mm: Optional[float] = None
+    empty_tolva_mm: Optional[float] = None
+    full_tolva_mm: Optional[float] = None
+    SP_tolva: Optional[float] = None
+    hysteresis: Optional[float] = None
+    min_on_s: Optional[float] = None
+    min_off_s: Optional[float] = None
+    max_run_s: Optional[float] = None
+    pulse_rate: Optional[float] = None
+
+    @validator("pulse_rate")
+    def pulse_range(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if v < 0.02 or v > 3.0:
+            raise ValueError("pulse_rate out of range (0.02 - 3.0)")
+        return v
+
 # ---------------------------------------------------------------------------
 # Configuration and state management
 
@@ -205,24 +248,25 @@ class BoardManager:
             if board_id in self.boards:
                 self.boards[board_id].online = (msg.state != "OFFLINE")
 
-    def get_state_snapshot(self) -> Dict[str, Any]:
-        """Return a snapshot of the current state."""
-        snapshot = {
-            "tanque_pct": self.tanque_pct,
-            "tolva_pct": self.tolva_pct,
-            "tanque_mm": self.tanque_mm,
-            "tolva_mm": self.tolva_mm,
-            "pump_state": self.boards["ACT"].pump_state,
-            "boards": {
-                k: {
-                    "online": v.online,
-                    "last_ts": v.last_seen,
-                    "rssi": v.rssi,
-                    "pump_state": v.pump_state
-                }
-                for k, v in self.boards.items()
+    async def get_state_snapshot(self) -> Dict[str, Any]:
+        """Return a snapshot of the current state in a thread‑safe manner."""
+        async with self._lock:
+            snapshot = {
+                "tanque_pct": self.tanque_pct,
+                "tolva_pct": self.tolva_pct,
+                "tanque_mm": self.tanque_mm,
+                "tolva_mm": self.tolva_mm,
+                "pump_state": self.boards["ACT"].pump_state,
+                "boards": {
+                    k: {
+                        "online": v.online,
+                        "last_ts": v.last_seen,
+                        "rssi": v.rssi,
+                        "pump_state": v.pump_state,
+                    }
+                    for k, v in self.boards.items()
+                },
             }
-        }
         return snapshot
 
     async def monitor_boards(self, send_offline_cb) -> None:
@@ -259,7 +303,7 @@ class ControlLogic:
             config = self.manager.config
             if config.get("mode") != "AUTO":
                 continue
-            snapshot = self.manager.get_state_snapshot()
+            snapshot = await self.manager.get_state_snapshot()
             tanque = snapshot["tanque_pct"]
             tolva = snapshot["tolva_pct"]
             pump_state = snapshot["pump_state"]
@@ -293,7 +337,7 @@ STATE_DATA = load_json(STATE_FILE, {})
 
 # Instantiate board manager and control logic
 board_manager = BoardManager(CONFIG)
-control_logic = ControlLogic(board_manager, lambda cmd: asyncio.create_task(send_command_to_master(cmd)))
+control_logic = ControlLogic(board_manager, send_command_to_master)
 
 # Set up static files for UI
 static_dir = Path(__file__).parent / "static"
@@ -376,76 +420,66 @@ document.getElementById('saveConfig').onclick = () => {
 
 @app.get("/status")
 async def status() -> JSONResponse:
-    return JSONResponse({"state": board_manager.get_state_snapshot(), "config": CONFIG})
+    state = await board_manager.get_state_snapshot()
+    return JSONResponse({"state": state, "config": CONFIG})
 
 
 @app.post("/config")
-async def set_config(data: Dict[str, float]):
-    # update config keys that are allowed
-    allowed = {
-        "empty_tanque_mm", "full_tanque_mm", "empty_tolva_mm", "full_tolva_mm",
-        "SP_tolva", "hysteresis", "min_on_s", "min_off_s", "max_run_s", "pulse_rate"
-    }
-    for k, v in data.items():
-        if k in allowed:
-            CONFIG[k] = float(v)
+async def set_config(data: ConfigUpdate):
+    update = data.dict(exclude_unset=True)
+    for k, v in update.items():
+        CONFIG[k] = float(v)
     save_json(CONFIG_FILE, CONFIG)
     # if pulse rate changed, send to actuator
-    if "pulse_rate" in data:
-        await send_pulse_rate(float(data["pulse_rate"]))
+    if "pulse_rate" in update:
+        await send_pulse_rate(float(update["pulse_rate"]))
     # forward calibration values to sensor node
     if bridge_ws:
-        # Build payload with calibration distances
         payload: Dict[str, float] = {
             "empty_tanque_mm": CONFIG["empty_tanque_mm"],
-            "full_tanque_mm":  CONFIG["full_tanque_mm"],
-            "empty_tolva_mm":  CONFIG["empty_tolva_mm"],
-            "full_tolva_mm":   CONFIG["full_tolva_mm"]
+            "full_tanque_mm": CONFIG["full_tanque_mm"],
+            "empty_tolva_mm": CONFIG["empty_tolva_mm"],
+            "full_tolva_mm": CONFIG["full_tolva_mm"],
         }
         cfg_msg = ConfigSetMessage(target="SENS", payload=payload)
-        await bridge_ws.send_text(cfg_msg.json(by_alias=True))
+        await safe_send_bridge(cfg_msg.json(by_alias=True))
     await broadcast_state()
     return {"result": "ok"}
 
 
 @app.post("/mode")
-async def set_mode(data: Dict[str, str]):
-    mode = data.get("mode", "AUTO").upper()
-    if mode not in {"AUTO", "MANUAL"}:
-        raise HTTPException(400, detail="Invalid mode")
-    CONFIG["mode"] = mode
+async def set_mode(data: ModeRequest):
+    CONFIG["mode"] = data.mode
     save_json(CONFIG_FILE, CONFIG)
     await broadcast_state()
     return {"result": "ok"}
 
 
 @app.post("/command")
-async def manual_command(data: Dict[str, str]):
+async def manual_command(data: CommandRequest):
     if CONFIG.get("mode") != "MANUAL":
         raise HTTPException(400, detail="System not in MANUAL mode")
-    cmd = data.get("cmd")
-    if cmd not in {"PUMP_ON", "PUMP_OFF"}:
-        raise HTTPException(400, detail="Invalid command")
     if not bridge_ws:
         raise HTTPException(500, detail="Master not connected")
-    value = "ON" if cmd == "PUMP_ON" else "OFF"
-    msg = CommandMessage(dst="ACT", cmd="PUMP", value=value, ttl_ms=int(CONFIG["max_run_s"] * 1000) if value == "ON" else 3000, reason="MANUAL")
-    await bridge_ws.send_text(msg.json(by_alias=True))
+    value = "ON" if data.cmd == "PUMP_ON" else "OFF"
+    msg = CommandMessage(
+        dst="ACT",
+        cmd="PUMP",
+        value=value,
+        ttl_ms=int(CONFIG["max_run_s"] * 1000) if value == "ON" else 3000,
+        reason="MANUAL",
+    )
+    await safe_send_bridge(msg.json(by_alias=True))
     return {"result": "ok"}
 
 
 # Endpoint to set pulse rate (pulses per minute) for actuator.
 # Accepts JSON {"pulse_rate": float}. Valid range: 0.02 to 3.0 pulses/minute.
 @app.post("/pulse")
-async def set_pulse(data: Dict[str, float]):
-    if "pulse_rate" not in data:
-        raise HTTPException(400, detail="Missing pulse_rate")
-    rate = float(data["pulse_rate"])
-    if rate < 0.02 or rate > 3.0:
-        raise HTTPException(400, detail="pulse_rate out of range (0.02 - 3.0)")
+async def set_pulse(data: PulseRateRequest):
+    rate = float(data.pulse_rate)
     CONFIG["pulse_rate"] = rate
     save_json(CONFIG_FILE, CONFIG)
-    # send to actuator
     await send_pulse_rate(rate)
     await broadcast_state()
     return {"result": "ok"}
@@ -525,42 +559,55 @@ async def ws_client(ws: WebSocket):
 
 # Utility: broadcast full state to all clients
 async def broadcast_state() -> None:
-    state_snapshot = board_manager.get_state_snapshot()
+    state_snapshot = await board_manager.get_state_snapshot()
     message = json.dumps({"type": "state", "state": state_snapshot, "config": CONFIG})
-    for ws in list(client_sockets):
-        try:
-            await ws.send_text(message)
-        except Exception:
+    if not client_sockets:
+        return
+    tasks = [ws.send_text(message) for ws in client_sockets]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for ws, res in zip(list(client_sockets), results):
+        if isinstance(res, Exception):
             client_sockets.remove(ws)
 
 
 # Utility: send initial state/config to a new client
 async def send_initial_state(ws: WebSocket) -> None:
-    state_snapshot = board_manager.get_state_snapshot()
+    state_snapshot = await board_manager.get_state_snapshot()
     await ws.send_text(json.dumps({"type": "state", "state": state_snapshot, "config": CONFIG}))
 
 
 # Utility: broadcast arbitrary message (e.g., logs) to clients
 async def broadcast_message(msg: Dict[str, Any]) -> None:
     data = json.dumps({"type": "msg", "payload": msg})
-    for ws in list(client_sockets):
-        try:
-            await ws.send_text(data)
-        except Exception:
+    if not client_sockets:
+        return
+    tasks = [ws.send_text(data) for ws in client_sockets]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for ws, res in zip(list(client_sockets), results):
+        if isinstance(res, Exception):
             client_sockets.remove(ws)
 
 
 # Callback to send commands to master
 async def send_command_to_master(cmd: CommandMessage) -> None:
-    if bridge_ws:
-        await bridge_ws.send_text(cmd.json(by_alias=True))
+    await safe_send_bridge(cmd.json(by_alias=True))
 
 # Helper to send new pulse rate to actuator
 async def send_pulse_rate(rate: float) -> None:
     """Send pulse rate configuration to actuator via master."""
     msg = ConfigSetMessage(target="ACT", payload={"pulse_rate": rate})
-    if bridge_ws:
-        await bridge_ws.send_text(msg.json(by_alias=True))
+    await safe_send_bridge(msg.json(by_alias=True))
+
+
+async def safe_send_bridge(message: str) -> None:
+    """Send a text message to the master WebSocket with error handling."""
+    if not bridge_ws:
+        logging.warning("Master WebSocket not connected")
+        return
+    try:
+        await bridge_ws.send_text(message)
+    except Exception:
+        logging.exception("Failed to send message to master")
 
 
 @app.on_event("startup")
@@ -584,5 +631,6 @@ async def on_board_offline(board_name: str) -> None:
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    save_json(STATE_FILE, board_manager.get_state_snapshot())
+    state = await board_manager.get_state_snapshot()
+    save_json(STATE_FILE, state)
     logging.info("Server shutdown; state saved")
