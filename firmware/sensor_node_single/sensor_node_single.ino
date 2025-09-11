@@ -1,12 +1,12 @@
 #include <WiFi.h>
-#include <esp_now.h>
+#include <WebSocketsClient.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 
 // -----------------------------------------------------------------------------
 // Generic firmware for a single ultrasonic sensor board (ESP32)
 // Each board reads one DYP-A01 sensor and reports distance/level
-// to the master board via ESP-NOW.
+// directly to the Python server via WiFi/WebSocket.
 // -----------------------------------------------------------------------------
 
 // ---- Board configuration ----------------------------------------------------
@@ -26,8 +26,12 @@
 #define SENSOR_TX_PIN 17
 #endif
 
-// MAC address of the master (gateway) board
-uint8_t MASTER_MAC[] = {0xA0, 0xB7, 0x65, 0x28, 0x71, 0x3C};
+// WiFi credentials and server endpoint
+const char* WIFI_SSID = "YOUR_SSID";
+const char* WIFI_PASS = "YOUR_PASSWORD";
+const char* WS_HOST  = "192.168.1.100"; // change to server IP
+const uint16_t WS_PORT = 8000;
+const char* WS_PATH = "/ws/board/SENS"; // WebSocket endpoint for this board
 
 // Preferences storage for calibration parameters
 Preferences prefs;
@@ -49,13 +53,20 @@ static uint32_t seq_num = 0;
 // Flag when configuration is updated
 volatile bool cfgUpdated = false;
 
+// WebSocket client and heartbeat timing
+WebSocketsClient ws;
+const unsigned long HB_INTERVAL_MS = 2000;
+unsigned long lastHb = 0;
+
 // Forward declarations
 void sendSensorData();
 uint16_t readDYP(HardwareSerial &port);
 float distToPercent(uint16_t dist);
-void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len);
 void loadConfig();
 void saveConfig();
+void sendHeartbeat();
+void sendToServer(const JsonDocument& doc);
+void onWsEvent(WStype_t type, uint8_t *payload, size_t length);
 
 // Serial instance for sensor
 HardwareSerial sensorSerial(SENSOR_UART_NUM);
@@ -68,26 +79,30 @@ void setup() {
   sensorSerial.begin(9600, SERIAL_8N1, SENSOR_RX_PIN, SENSOR_TX_PIN);
 
   WiFi.mode(WIFI_STA);
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("Error initializing ESP-NOW");
-    ESP.restart();
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print('.');
   }
-  esp_now_register_recv_cb(onDataRecv);
+  Serial.println(" connected");
 
-  // Add master peer
-  esp_now_peer_info_t peer{};
-  memcpy(peer.peer_addr, MASTER_MAC, 6);
-  peer.channel = 0; // same channel
-  peer.encrypt = false;
-  esp_now_add_peer(&peer);
+  ws.begin(WS_HOST, WS_PORT, WS_PATH);
+  ws.onEvent(onWsEvent);
+  ws.setReconnectInterval(5000);
 }
 
 void loop() {
   static unsigned long lastSend = 0;
   unsigned long now = millis();
+  ws.loop();
   if (now - lastSend >= 500) {
     lastSend = now;
     sendSensorData();
+  }
+  if (now - lastHb >= HB_INTERVAL_MS) {
+    lastHb = now;
+    sendHeartbeat();
   }
   if (cfgUpdated) {
     cfgUpdated = false;
@@ -127,11 +142,7 @@ void sendSensorData() {
   item["dist_mm"] = median;
   item["level_pct"] = isnan(pct) ? -1.0 : pct;
 
-  char buffer[256];
-  size_t len = serializeJson(doc, buffer);
-  if (esp_now_send(MASTER_MAC, (uint8_t*)buffer, len) != ESP_OK) {
-    Serial.println("ESP-NOW send error");
-  }
+  sendToServer(doc);
 }
 
 uint16_t readDYP(HardwareSerial &port) {
@@ -159,32 +170,37 @@ float distToPercent(uint16_t dist) {
   return pct;
 }
 
-void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
-  if (!incomingData || len <= 0) return;
-  String msg((const char*)incomingData, len);
+void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
+  if (type != WStype_TEXT) return;
   StaticJsonDocument<256> doc;
-  if (deserializeJson(doc, msg) != DeserializationError::Ok) {
-    Serial.println("JSON parse error");
+  DeserializationError err = deserializeJson(doc, payload, length);
+  if (err) {
+    Serial.println("WS parse error");
     return;
   }
-  const char* type = doc["type"];
-  if (!type) return;
-  if (strcmp(type, "config_set") == 0) {
-    JsonObject payload = doc["payload"];
-    if (payload.containsKey("empty_mm")) cfg.empty_mm = payload["empty_mm"].as<float>();
-    if (payload.containsKey("full_mm")) cfg.full_mm = payload["full_mm"].as<float>();
-    // Backwards compatibility for legacy keys
-    if (payload.containsKey("empty_tanque_mm")) cfg.empty_mm = payload["empty_tanque_mm"].as<float>();
-    if (payload.containsKey("full_tanque_mm")) cfg.full_mm = payload["full_tanque_mm"].as<float>();
+  const char* mtype = doc["type"];
+  if (!mtype) return;
+  if (strcmp(mtype, "config_set") == 0) {
+    JsonObject pl = doc["payload"];
+    if (pl.containsKey("empty_mm")) cfg.empty_mm = pl["empty_mm"].as<float>();
+    if (pl.containsKey("full_mm")) cfg.full_mm = pl["full_mm"].as<float>();
+    if (pl.containsKey("empty_tanque_mm")) cfg.empty_mm = pl["empty_tanque_mm"].as<float>();
+    if (pl.containsKey("full_tanque_mm")) cfg.full_mm = pl["full_tanque_mm"].as<float>();
     cfgUpdated = true;
-  } else if (strcmp(type, "ping") == 0) {
-    StaticJsonDocument<128> out;
-    out["type"] = "hb";
-    out["from"] = SENSOR_ID;
-    char buffer[128];
-    size_t lenOut = serializeJson(out, buffer);
-    esp_now_send(MASTER_MAC, (uint8_t*)buffer, lenOut);
   }
+}
+
+void sendHeartbeat() {
+  StaticJsonDocument<128> doc;
+  doc["type"] = "hb";
+  doc["from"] = "SENS";
+  sendToServer(doc);
+}
+
+void sendToServer(const JsonDocument& doc) {
+  char buffer[256];
+  size_t len = serializeJson(doc, buffer);
+  ws.sendTXT(buffer, len);
 }
 
 void loadConfig() {

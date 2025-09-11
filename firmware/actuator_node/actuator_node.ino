@@ -1,5 +1,5 @@
 #include <WiFi.h>
-#include <esp_now.h>
+#include <WebSocketsClient.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 
@@ -8,8 +8,12 @@
 // Output pin for pulse relay. When pump is ON, this pin toggles at the configured rate (pulses per minute).
 #define PIN_PULSE 26
 
-// MAC address of master/gateway board
-uint8_t MASTER_MAC[] = {0xA0, 0xB7, 0x65, 0x28, 0x71, 0x3C};
+// WiFi credentials and server endpoint
+const char* WIFI_SSID = "YOUR_SSID";
+const char* WIFI_PASS = "YOUR_PASSWORD";
+const char* WS_HOST  = "192.168.1.100"; // change to server IP
+const uint16_t WS_PORT = 8000;
+const char* WS_PATH = "/ws/board/ACT"; // WebSocket endpoint for actuator
 
 // Preferences for storing persistent settings
 Preferences prefs;
@@ -24,12 +28,15 @@ float pulseRate = 1.0f;          // pulses per minute (default)
 bool pulseOnState = false;       // current output state of the pulse relay
 unsigned long lastPulseToggle = 0; // last time pulse pin toggled
 
-// Heartbeat interval for sending status back to master
+// Heartbeat interval for sending status back to server
 const unsigned long HB_INTERVAL_MS = 2000;
 unsigned long lastHb = 0;
 
-void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len);
+WebSocketsClient ws;
+
+void onWsEvent(WStype_t type, uint8_t *payload, size_t length);
 void sendState(const char* reason);
+void sendToServer(const JsonDocument& doc);
 
 void setup() {
   Serial.begin(115200);
@@ -47,24 +54,22 @@ void setup() {
   if (pumpOn) lastCommandMs = millis();
 
   WiFi.mode(WIFI_STA);
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("Error initializing ESP-NOW");
-    ESP.restart();
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print('.');
   }
-  // Register receive callback with new signature (esp_now_recv_info_t*)
-  esp_now_register_recv_cb(onDataRecv);
-  esp_now_peer_info_t peer;
-  memset(&peer, 0, sizeof(peer));
-  memcpy(peer.peer_addr, MASTER_MAC, 6);
-  peer.channel = 0;
-  peer.encrypt = false;
-  if (esp_now_add_peer(&peer) != ESP_OK) {
-    Serial.println("Failed to add master peer");
-  }
+  Serial.println(" connected");
+
+  ws.begin(WS_HOST, WS_PORT, WS_PATH);
+  ws.onEvent(onWsEvent);
+  ws.setReconnectInterval(5000);
 }
 
 void loop() {
   unsigned long now = millis();
+  ws.loop();
   // Failsafe: turn off pump if TTL expired
   if (pumpOn && (now - lastCommandMs > currentTTLms)) {
     pumpOn = false;
@@ -101,21 +106,19 @@ void loop() {
   }
 }
 
-// Callback for receiving commands from master.  New ESP-IDF v5.x signature
-void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
-  if (!incomingData || len <= 0) return;
-  String msg((const char*)incomingData, len);
+// WebSocket callback for commands/config from server
+void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
+  if (type != WStype_TEXT) return;
   StaticJsonDocument<256> doc;
-  if (deserializeJson(doc, msg) != DeserializationError::Ok) {
+  if (deserializeJson(doc, payload, length) != DeserializationError::Ok) {
     Serial.println("JSON parse error on actuator");
     return;
   }
-  const char* type = doc["type"];
-  if (!type) return;
-  // Command from server forwarded by master
-  if (strcmp(type, "cmd") == 0) {
+  const char* mtype = doc["type"];
+  if (!mtype) return;
+  if (strcmp(mtype, "cmd") == 0) {
     const char* dst = doc["dst"];
-    if (dst && String(dst) != "ACT") return; // Not for us
+    if (dst && String(dst) != "ACT") return;
     const char* cmd = doc["cmd"];
     const char* value = doc["value"];
     uint32_t ttl = doc["ttl_ms"] | 0;
@@ -133,16 +136,12 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, in
         Serial.println("Pump OFF via command");
         sendState("CMD_OFF");
       }
-      // Persist last state and TTL
       prefs.begin("act", false);
       prefs.putBool("pumpOn", pumpOn);
       prefs.putULong("ttl", currentTTLms);
       prefs.end();
     }
-  } else if (strcmp(type, "ping") == 0) {
-    sendState("HB");
-  } else if (strcmp(type, "config_set") == 0) {
-    // Handle configuration for actuator (pulse rate)
+  } else if (strcmp(mtype, "config_set") == 0) {
     const char* target = doc["target"];
     if (target && String(target) == "ACT") {
       JsonObject payload = doc["payload"];
@@ -150,7 +149,6 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, in
         float newRate = payload["pulse_rate"].as<float>();
         if (newRate < 0.001f) newRate = 0.0f;
         pulseRate = newRate;
-        // Persist pulse rate
         prefs.begin("act", false);
         prefs.putFloat("pulseRate", pulseRate);
         prefs.end();
@@ -161,14 +159,18 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, in
   }
 }
 
-// Send pump state back to master
+// Send pump state back to server
 void sendState(const char* reason) {
   StaticJsonDocument<128> doc;
   doc["type"] = "ack";
   doc["from"] = "ACT";
   doc["state"] = pumpOn ? "ON" : "OFF";
   doc["reason"] = reason;
-  char buffer[128];
+  sendToServer(doc);
+}
+
+void sendToServer(const JsonDocument& doc) {
+  char buffer[256];
   size_t len = serializeJson(doc, buffer);
-  esp_now_send(MASTER_MAC, (uint8_t*)buffer, len);
+  ws.sendTXT(buffer, len);
 }

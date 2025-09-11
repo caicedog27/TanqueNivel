@@ -14,11 +14,11 @@ integration in FastAPI allows us to build real‑time applications with low
 latency【747392896601809†L41-L69】. For concurrency, we rely on Python’s
 asyncio event loop and manage tasks with care.
 
-The server exposes two WebSocket endpoints:
-  - `/ws/bridge`  : used by the master ESP32 gateway to forward sensor data
-    and receive commands.
-  - `/ws/client`  : used by browser clients to visualize data and send
-    configuration or manual commands.
+  The server expone dos WebSocket:
+    - `/ws/board/{id}` : usado por los nodos ESP32 (sensores y actuador) para
+      enviar datos y recibir comandos directamente.
+    - `/ws/client` : utilizado por los clientes web para visualizar datos y
+      enviar configuración o comandos manuales.
 
 The server stores configuration and state in JSON files and uses background
 tasks to monitor timeouts and ensure fail‑safe behaviour.
@@ -160,8 +160,7 @@ class BoardManager:
     def __init__(self, config: Dict[str, Any]):
         self.boards: Dict[str, BoardState] = {
             "SENS": BoardState(),
-            "ACT": BoardState(),
-            "MASTER": BoardState()
+            "ACT": BoardState()
         }
         # sensor levels (percentage) and raw distances (mm)
         self.tanque_pct: Optional[float] = None
@@ -229,11 +228,10 @@ class BoardManager:
         """Monitor boards and trigger callbacks if they go offline."""
         SENSOR_TIMEOUT = 5  # seconds
         ACT_TIMEOUT = 5
-        MASTER_TIMEOUT = 10
         while True:
             now = time.time()
             async with self._lock:
-                for name, timeout in {"SENS": SENSOR_TIMEOUT, "ACT": ACT_TIMEOUT, "MASTER": MASTER_TIMEOUT}.items():
+                for name, timeout in {"SENS": SENSOR_TIMEOUT, "ACT": ACT_TIMEOUT}.items():
                     board = self.boards[name]
                     if board.online and (now - board.last_seen > timeout):
                         board.online = False
@@ -293,14 +291,14 @@ STATE_DATA = load_json(STATE_FILE, {})
 
 # Instantiate board manager and control logic
 board_manager = BoardManager(CONFIG)
-control_logic = ControlLogic(board_manager, lambda cmd: asyncio.create_task(send_command_to_master(cmd)))
+control_logic = ControlLogic(board_manager, lambda cmd: asyncio.create_task(send_message_to_board(cmd.dst, cmd)))
 
 # Set up static files for UI
 static_dir = Path(__file__).parent / "static"
 static_dir.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-bridge_ws: Optional[WebSocket] = None  # WebSocket to master
+board_sockets: Dict[str, WebSocket] = {}  # WebSocket per board
 client_sockets: List[WebSocket] = []   # connected UI clients
 
 # Logging configuration
@@ -344,7 +342,6 @@ ws.onmessage = (ev) => {
     let html = '';
     html += `<p>SENS: <span class='${boards.SENS.online?'online':'offline'}'>${boards.SENS.online?'Online':'Offline'}</span></p>`;
     html += `<p>ACT: <span class='${boards.ACT.online?'online':'offline'}'>${boards.ACT.online?'Online':'Offline'}</span></p>`;
-    html += `<p>MASTER: <span class='${boards.MASTER.online?'online':'offline'}'>${boards.MASTER.online?'Online':'Offline'}</span></p>`;
     if (s.tanque_pct != null) html += `<p>Tanque: ${s.tanque_pct.toFixed(1)} %</p>`;
     if (s.tolva_pct != null) html += `<p>Tolva: ${s.tolva_pct.toFixed(1)} %</p>`;
     html += `<p>Pump: ${s.pump_state?'ON':'OFF'}</p>`;
@@ -394,16 +391,14 @@ async def set_config(data: Dict[str, float]):
     if "pulse_rate" in data:
         await send_pulse_rate(float(data["pulse_rate"]))
     # forward calibration values to sensor node
-    if bridge_ws:
-        # Build payload with calibration distances
-        payload: Dict[str, float] = {
-            "empty_tanque_mm": CONFIG["empty_tanque_mm"],
-            "full_tanque_mm":  CONFIG["full_tanque_mm"],
-            "empty_tolva_mm":  CONFIG["empty_tolva_mm"],
-            "full_tolva_mm":   CONFIG["full_tolva_mm"]
-        }
-        cfg_msg = ConfigSetMessage(target="SENS", payload=payload)
-        await bridge_ws.send_text(cfg_msg.json(by_alias=True))
+    payload: Dict[str, float] = {
+        "empty_tanque_mm": CONFIG["empty_tanque_mm"],
+        "full_tanque_mm":  CONFIG["full_tanque_mm"],
+        "empty_tolva_mm":  CONFIG["empty_tolva_mm"],
+        "full_tolva_mm":   CONFIG["full_tolva_mm"]
+    }
+    cfg_msg = ConfigSetMessage(target="SENS", payload=payload)
+    await send_message_to_board("SENS", cfg_msg)
     await broadcast_state()
     return {"result": "ok"}
 
@@ -426,11 +421,11 @@ async def manual_command(data: Dict[str, str]):
     cmd = data.get("cmd")
     if cmd not in {"PUMP_ON", "PUMP_OFF"}:
         raise HTTPException(400, detail="Invalid command")
-    if not bridge_ws:
-        raise HTTPException(500, detail="Master not connected")
     value = "ON" if cmd == "PUMP_ON" else "OFF"
+    if "ACT" not in board_sockets:
+        raise HTTPException(500, detail="Actuator not connected")
     msg = CommandMessage(dst="ACT", cmd="PUMP", value=value, ttl_ms=int(CONFIG["max_run_s"] * 1000) if value == "ON" else 3000, reason="MANUAL")
-    await bridge_ws.send_text(msg.json(by_alias=True))
+    await send_message_to_board("ACT", msg)
     return {"result": "ok"}
 
 
@@ -451,14 +446,14 @@ async def set_pulse(data: Dict[str, float]):
     return {"result": "ok"}
 
 
-# WebSocket endpoint for master ESP32
-@app.websocket("/ws/bridge")
-async def ws_bridge(ws: WebSocket):
-    global bridge_ws
+@app.websocket("/ws/board/{board_id}")
+async def ws_board(ws: WebSocket, board_id: str):
+    board_id = board_id.upper()
     await ws.accept()
-    bridge_ws = ws
-    logging.info("Master connected via WebSocket")
-    board_manager.boards["MASTER"].update_seen()
+    board_sockets[board_id] = ws
+    logging.info("Board %s connected", board_id)
+    if board_id in board_manager.boards:
+        board_manager.boards[board_id].update_seen()
     await broadcast_state()
     try:
         while True:
@@ -468,11 +463,10 @@ async def ws_bridge(ws: WebSocket):
             except json.JSONDecodeError:
                 continue
             msg_type = parsed.get("type")
-            # heartbeats are ignored
             if msg_type == "hb":
-                board_manager.boards["MASTER"].update_seen()
+                if board_id in board_manager.boards:
+                    board_manager.boards[board_id].update_seen()
                 continue
-            # sensor data
             if msg_type == "sensor_data":
                 try:
                     msg = SensorDataMessage(**parsed)
@@ -481,7 +475,6 @@ async def ws_bridge(ws: WebSocket):
                     continue
                 except Exception as e:
                     logging.warning("Invalid sensor_data: %s", e)
-            # ack
             if msg_type == "ack":
                 try:
                     msg = AckMessage(**parsed)
@@ -490,7 +483,6 @@ async def ws_bridge(ws: WebSocket):
                     continue
                 except Exception as e:
                     logging.warning("Invalid ack: %s", e)
-            # status messages
             if msg_type == "status":
                 try:
                     msg = StatusMessage(**parsed)
@@ -499,12 +491,13 @@ async def ws_bridge(ws: WebSocket):
                     continue
                 except Exception as e:
                     logging.warning("Invalid status: %s", e)
-            # forward any other messages to UI clients
-            await broadcast_message({"from_master": parsed})
+            await broadcast_message({"from_board": {"id": board_id, "msg": parsed}})
     except WebSocketDisconnect:
-        logging.info("Master disconnected")
+        logging.info("Board %s disconnected", board_id)
     finally:
-        bridge_ws = None
+        board_sockets.pop(board_id, None)
+        if board_id in board_manager.boards:
+            board_manager.boards[board_id].online = False
         await broadcast_state()
 
 
@@ -550,17 +543,16 @@ async def broadcast_message(msg: Dict[str, Any]) -> None:
             client_sockets.remove(ws)
 
 
-# Callback to send commands to master
-async def send_command_to_master(cmd: CommandMessage) -> None:
-    if bridge_ws:
-        await bridge_ws.send_text(cmd.json(by_alias=True))
+# Utility to send a message to a specific board if connected
+async def send_message_to_board(dst: str, msg: BaseModel) -> None:
+    ws = board_sockets.get(dst)
+    if ws:
+        await ws.send_text(msg.json(by_alias=True))
 
 # Helper to send new pulse rate to actuator
 async def send_pulse_rate(rate: float) -> None:
-    """Send pulse rate configuration to actuator via master."""
     msg = ConfigSetMessage(target="ACT", payload={"pulse_rate": rate})
-    if bridge_ws:
-        await bridge_ws.send_text(msg.json(by_alias=True))
+    await send_message_to_board("ACT", msg)
 
 
 @app.on_event("startup")

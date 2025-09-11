@@ -1,15 +1,14 @@
 # Sistema de Control de Niveles Industrial
 
-Este repositorio contiene el firmware para tres tipos de nodos ESP32 y un
-servidor Python basado en FastAPI.  Se ha reorganizado la estructura para
-facilitar un despliegue industrial donde cada sensor ultrasónico dispone de su
-propio ESP32 y el actuador de la bomba funciona de forma independiente.
+Este repositorio contiene el firmware para dos tipos de nodos ESP32 y un
+servidor Python basado en FastAPI. Cada sensor ultrasónico dispone de su
+propio ESP32 conectado por WiFi al servidor, y el actuador de la bomba
+funciona de forma independiente también vía WiFi.
 
 ## Estructura
 
 ```
 firmware/
-  master_node/       # Puente WiFi ↔ ESP‑NOW
   actuator_node/     # Control del relé con temporización y tren de pulsos
   sensor_node_single/# Firmware genérico para un sensor ultrasónico
 server/
@@ -31,13 +30,13 @@ server/
 
 ## Uso
 
-1. Ajuste las direcciones MAC y credenciales WiFi en cada firmware.
+1. Ajuste las credenciales WiFi y la IP del servidor en cada firmware.
 2. Compile y cargue cada sketch en su correspondiente ESP32.
 3. Ejecute el servidor con:
    ```bash
    uvicorn server.main:app --reload --host 0.0.0.0 --port 8000
    ```
 
-El servidor expone `/ws/bridge` para el nodo maestro y `/ws/client` para la
-interfaz web.
+Cada nodo se conecta a `/ws/board/{ID}` (por ejemplo `/ws/board/SENS` o
+`/ws/board/ACT`) y la interfaz web usa `/ws/client`.
 
