@@ -145,19 +145,40 @@ void sendSensorData() {
   sendToServer(doc);
 }
 
+// Read the latest distance frame from the DYP-A01 sensor.
+// The sensor refreshes its measurement roughly every 100 ms. To get a
+// reliable value we drain all available frames and keep the most recent
+// valid one, waiting briefly if no fresh data has arrived yet.
 uint16_t readDYP(HardwareSerial &port) {
-  while (port.available() >= 4) {
-    int header = port.read();
-    if (header == 0xFF) {
+  uint16_t dist = 0;
+  unsigned long start = millis();
+
+  // allow up to ~120ms (one measurement period plus margin) for data
+  while (millis() - start < 120) {
+    while (port.available() >= 4) {
+      int header = port.read();
+      if (header != 0xFF) {
+        continue;  // not a valid frame header
+      }
       int high = port.read();
-      int low = port.read();
-      int sum = port.read();
+      int low  = port.read();
+      int sum  = port.read();
       if (((0xFF + high + low) & 0xFF) == sum) {
-        return ((uint16_t)high << 8) | low;
+        dist = ((uint16_t)high << 8) | low;  // store latest valid reading
       }
     }
+    if (dist) {
+      break;  // got a measurement
+    }
+    delay(5);  // wait a bit for the sensor to produce a frame
   }
-  return 0;
+
+  // Flush leftover bytes so the next call starts fresh
+  while (port.available()) {
+    port.read();
+  }
+
+  return dist;
 }
 
 float distToPercent(uint16_t dist) {
