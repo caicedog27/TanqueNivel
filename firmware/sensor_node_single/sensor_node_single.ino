@@ -25,6 +25,9 @@
 #ifndef SENSOR_TX_PIN
 #define SENSOR_TX_PIN 17
 #endif
+#ifndef SENSOR_TRIG_PIN
+#define SENSOR_TRIG_PIN 4
+#endif
 
 // WiFi credentials and server endpoint
 const char* WIFI_SSID = "YOUR_SSID";
@@ -42,11 +45,6 @@ struct Config {
   float full_mm;   // measured distance when container is full
 } cfg;
 
-// Median filter buffer
-static const uint8_t BUF_LEN = 5;
-uint16_t buf[BUF_LEN] = {0};
-uint8_t bufIndex = 0;
-
 // Sequence number for packets
 static uint32_t seq_num = 0;
 
@@ -59,8 +57,11 @@ const unsigned long HB_INTERVAL_MS = 2000;
 unsigned long lastHb = 0;
 
 // Forward declarations
+struct Reading { uint16_t mm; bool ok; };
+void triggerOnce();
+Reading readFrame(HardwareSerial &port, uint32_t timeout_ms = 80);
+uint16_t readDYP(HardwareSerial &port, uint8_t samples = 5, uint16_t maxStep = 400);
 void sendSensorData();
-uint16_t readDYP(HardwareSerial &port);
 float distToPercent(uint16_t dist);
 void loadConfig();
 void saveConfig();
@@ -77,6 +78,8 @@ void setup() {
 
   // Start sensor UART
   sensorSerial.begin(9600, SERIAL_8N1, SENSOR_RX_PIN, SENSOR_TX_PIN);
+  pinMode(SENSOR_TRIG_PIN, OUTPUT);
+  digitalWrite(SENSOR_TRIG_PIN, HIGH);
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -112,23 +115,7 @@ void loop() {
 
 void sendSensorData() {
   uint16_t dist = readDYP(sensorSerial);
-  buf[bufIndex] = dist;
-  bufIndex = (bufIndex + 1) % BUF_LEN;
-
-  // copy buffer for sorting
-  uint16_t temp[BUF_LEN];
-  memcpy(temp, buf, sizeof(buf));
-  for (int i = 1; i < BUF_LEN; ++i) {
-    uint16_t key = temp[i];
-    int j = i - 1;
-    while (j >= 0 && temp[j] > key) {
-      temp[j + 1] = temp[j];
-      j--;
-    }
-    temp[j + 1] = key;
-  }
-  uint16_t median = temp[BUF_LEN / 2];
-  float pct = distToPercent(median);
+  float pct = distToPercent(dist);
 
   StaticJsonDocument<256> doc;
   doc["type"] = "sensor_data";
@@ -139,46 +126,75 @@ void sendSensorData() {
   JsonArray items = doc.createNestedArray("items");
   JsonObject item = items.createNestedObject();
   item["id"] = SENSOR_ID;
-  item["dist_mm"] = median;
+  item["dist_mm"] = dist;
   item["level_pct"] = isnan(pct) ? -1.0 : pct;
 
   sendToServer(doc);
 }
 
-// Read the latest distance frame from the DYP-A01 sensor.
-// The sensor refreshes its measurement roughly every 100 ms. To get a
-// reliable value we drain all available frames and keep the most recent
-// valid one, waiting briefly if no fresh data has arrived yet.
-uint16_t readDYP(HardwareSerial &port) {
-  uint16_t dist = 0;
-  unsigned long start = millis();
+// Trigger a single ultrasonic measurement on the DYP-A01 sensor (controlled mode)
+void triggerOnce() {
+  digitalWrite(SENSOR_TRIG_PIN, HIGH);
+  delayMicroseconds(200);
+  digitalWrite(SENSOR_TRIG_PIN, LOW);
+  delayMicroseconds(2000);
+  digitalWrite(SENSOR_TRIG_PIN, HIGH);
+}
 
-  // allow up to ~120ms (one measurement period plus margin) for data
-  while (millis() - start < 120) {
-    while (port.available() >= 4) {
-      int header = port.read();
-      if (header != 0xFF) {
-        continue;  // not a valid frame header
-      }
-      int high = port.read();
-      int low  = port.read();
-      int sum  = port.read();
-      if (((0xFF + high + low) & 0xFF) == sum) {
-        dist = ((uint16_t)high << 8) | low;  // store latest valid reading
+// Read one UART frame from the sensor. Returns {mm,ok}.
+Reading readFrame(HardwareSerial &port, uint32_t timeout_ms) {
+  uint32_t t0 = millis();
+  while (millis() - t0 < timeout_ms) {
+    if (port.available()) {
+      uint8_t b = port.read();
+      if (b == 0xFF) {
+        while (port.available() < 3) {
+          if (millis() - t0 > timeout_ms) break;
+        }
+        if (port.available() >= 3) {
+          uint8_t dh = port.read();
+          uint8_t dl = port.read();
+          uint8_t sum = port.read();
+          uint8_t calc = (0xFF + dh + dl) & 0xFF;
+          uint16_t mm = ((uint16_t)dh << 8) | dl;
+          bool ok = (calc == sum) && (mm >= 280 && mm <= 7500);
+          return {mm, ok};
+        }
       }
     }
-    if (dist) {
-      break;  // got a measurement
+  }
+  return {0, false};
+}
+
+// Robust distance read using median and step rejection
+uint16_t readDYP(HardwareSerial &port, uint8_t samples, uint16_t maxStep) {
+  static uint16_t last = 0;
+  uint16_t buf[9];
+  uint8_t k = 0;
+  for (uint8_t i = 0; i < samples; ++i) {
+    triggerOnce();
+    delay(60);  // sensor processing time
+    Reading r = readFrame(port);
+    if (r.ok) buf[k++] = r.mm;
+    delay(15);
+  }
+  if (!k) return 0;
+
+  for (uint8_t i = 0; i < k; ++i) {
+    for (uint8_t j = i + 1; j < k; ++j) {
+      if (buf[j] < buf[i]) {
+        uint16_t tmp = buf[i];
+        buf[i] = buf[j];
+        buf[j] = tmp;
+      }
     }
-    delay(5);  // wait a bit for the sensor to produce a frame
   }
-
-  // Flush leftover bytes so the next call starts fresh
-  while (port.available()) {
-    port.read();
+  uint16_t med = buf[k / 2];
+  if (last && abs((int)med - (int)last) > maxStep) {
+    med = last;
   }
-
-  return dist;
+  last = med;
+  return med;
 }
 
 float distToPercent(uint16_t dist) {
