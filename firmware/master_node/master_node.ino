@@ -13,14 +13,20 @@ const uint16_t WS_PORT = 8000;
 const char* WS_PATH = "/ws/bridge";
 
 // MAC addresses of other boards
-uint8_t SENSOR_MAC[]   = {0xA0, 0xB7, 0x65, 0x2D, 0xC5, 0xD4}; // sensors node
+// List all sensor nodes here (one ESP32 per ultrasonic sensor)
+const uint8_t SENSOR_MACS[][6] = {
+  {0xA0, 0xB7, 0x65, 0x2D, 0xC5, 0xD4}, // Sensor 1
+  // {0xA0, 0xB7, 0x65, 0x2D, 0xC5, 0xD5}, // Sensor 2 (example)
+};
+const size_t SENSOR_COUNT = sizeof(SENSOR_MACS) / sizeof(SENSOR_MACS[0]);
+
 uint8_t ACTUATOR_MAC[] = {0xC4, 0x4F, 0x33, 0x79, 0xB3, 0x45}; // actuator (relay) node
 
 // WebSocket client
 WebSocketsClient ws;
 
 // Last timestamps for sensor and actuator heartbeats
-unsigned long lastSensorHB = 0;
+unsigned long lastSensorHB[SENSOR_COUNT] = {0};
 unsigned long lastActHB    = 0;
 
 // Timeout thresholds (ms)
@@ -64,14 +70,19 @@ void onNowRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int
     return;
   }
   // Determine sender type by comparing src_addr
-  bool fromSensor  = false;
+  int sensorIndex = -1;
   bool fromActuator= false;
   if (info && info->src_addr) {
-    fromSensor   = memcmp(info->src_addr, SENSOR_MAC, 6) == 0;
+    for (size_t i = 0; i < SENSOR_COUNT; ++i) {
+      if (memcmp(info->src_addr, SENSOR_MACS[i], 6) == 0) {
+        sensorIndex = (int)i;
+        break;
+      }
+    }
     fromActuator = memcmp(info->src_addr, ACTUATOR_MAC, 6) == 0;
   }
-  if (fromSensor) {
-    lastSensorHB = millis();
+  if (sensorIndex >= 0) {
+    lastSensorHB[sensorIndex] = millis();
   } else if (fromActuator) {
     lastActHB = millis();
   }
@@ -114,7 +125,9 @@ void onWsEvent(WStype_t type, uint8_t * payload, size_t length) {
         if (strcmp(dst, "ACT") == 0) {
           sendToPeer(ACTUATOR_MAC, doc);
         } else if (strcmp(dst, "SENS") == 0) {
-          sendToPeer(SENSOR_MAC, doc);
+          for (size_t i = 0; i < SENSOR_COUNT; ++i) {
+            sendToPeer(SENSOR_MACS[i], doc);
+          }
         }
       } else if (strcmp(mtype, "config_set") == 0) {
         // Configuration messages target a board via "target"
@@ -123,7 +136,9 @@ void onWsEvent(WStype_t type, uint8_t * payload, size_t length) {
         if (strcmp(target, "ACT") == 0) {
           sendToPeer(ACTUATOR_MAC, doc);
         } else if (strcmp(target, "SENS") == 0) {
-          sendToPeer(SENSOR_MAC, doc);
+          for (size_t i = 0; i < SENSOR_COUNT; ++i) {
+            sendToPeer(SENSOR_MACS[i], doc);
+          }
         }
       }
       break;
@@ -159,10 +174,12 @@ void setup() {
   // Add peers
   esp_now_peer_info_t peer;
   memset(&peer, 0, sizeof(peer));
-  memcpy(peer.peer_addr, SENSOR_MAC, 6);
   peer.channel = WiFi.channel();
   peer.encrypt = false;
-  esp_now_add_peer(&peer);
+  for (size_t i = 0; i < SENSOR_COUNT; ++i) {
+    memcpy(peer.peer_addr, SENSOR_MACS[i], 6);
+    esp_now_add_peer(&peer);
+  }
   memcpy(peer.peer_addr, ACTUATOR_MAC, 6);
   esp_now_add_peer(&peer);
 
@@ -182,7 +199,9 @@ void loop() {
     StaticJsonDocument<64> doc;
     doc["type"] = "ping";
     doc["from"] = "MASTER";
-    sendToPeer(SENSOR_MAC, doc);
+    for (size_t i = 0; i < SENSOR_COUNT; ++i) {
+      sendToPeer(SENSOR_MACS[i], doc);
+    }
     sendToPeer(ACTUATOR_MAC, doc);
     // Optionally send heartbeat to server
     StaticJsonDocument<64> hb;
@@ -191,14 +210,15 @@ void loop() {
     sendToServer(hb);
   }
   // Check timeouts and notify server if boards offline
-  if ((millis() - lastSensorHB) > SENSOR_TIMEOUT_MS) {
-    StaticJsonDocument<128> doc;
-    doc["type"] = "status";
-    doc["board"] = "SENS";
-    doc["state"] = "OFFLINE";
-    sendToServer(doc);
-    // Reset lastSensorHB to avoid spamming
-    lastSensorHB = millis();
+  for (size_t i = 0; i < SENSOR_COUNT; ++i) {
+    if ((millis() - lastSensorHB[i]) > SENSOR_TIMEOUT_MS) {
+      StaticJsonDocument<128> doc;
+      doc["type"] = "status";
+      doc["board"] = "SENS";
+      doc["state"] = "OFFLINE";
+      sendToServer(doc);
+      lastSensorHB[i] = millis();
+    }
   }
   if ((millis() - lastActHB) > ACT_TIMEOUT_MS) {
     StaticJsonDocument<128> doc;

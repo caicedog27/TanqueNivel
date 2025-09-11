@@ -93,8 +93,9 @@ class HeartbeatMessage(BaseModel):
 # ---------------------------------------------------------------------------
 # Configuration and state management
 
-CONFIG_FILE = Path("config.json")
-STATE_FILE = Path("state.json")
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = BASE_DIR / "config.json"
+STATE_FILE = BASE_DIR / "state.json"
 
 # Default configuration.  The system uses separate calibration values
 # for each ultrasonic sensor: when the tanks are empty or full.  The
