@@ -1,0 +1,37 @@
+{
+  "tank": {
+    "cal": {
+      "empty_mm": 800,
+      "full_mm": 200,
+      "target_pct": 65.0,
+      "hysteresis_pct": 5.0
+    }
+  },
+  "hopper": {
+    "cal": {
+      "empty_mm": 800,
+      "full_mm": 200,
+      "target_pct": 65.0,
+      "hysteresis_pct": 5.0
+    }
+  },
+  "auto": {
+    "anti_spill_margin_pct": 1.2,
+    "ema_alpha": 0.2,
+    "tank_low_lock_pct": 15.0
+  },
+  "net": {
+    "allowed_origins": [
+      "http://192.168.1.68:8000",
+      "http://localhost:8000",
+      "http://127.0.0.1:8000"
+    ],
+    "board_tokens": {
+      "ACT-01": "test_ws_board_2025_ABCDEF",
+      "SENS_TANQUE": "test_ws_board_2025_ABCDEF",
+      "SENS_TOLVA": "test_ws_board_2025_ABCDEF"
+    },
+    "board_auto_register": true,
+    "api_key": "DEVKEY123"
+  }
+}

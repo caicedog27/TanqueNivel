@@ -1,580 +1,430 @@
-"""
-Professional server implementation for the tank level control system.
 
-This server uses FastAPI (built on Starlette) and Pydantic for a modern, type‑safe
-architecture. It defines strong message models, maintains board state via classes,
-and schedules background tasks to supervise board connectivity and pump runtime.
-
-FastAPI has become one of the most popular Python frameworks in 2025. According
-to the JetBrains State of Python survey, FastAPI leads the charts because it
-combines async/await support, automatic request validation and OpenAPI
-documentation generation【848250930434527†L107-L138】. It’s built on Starlette and
-Pydantic, which provide high performance and a modern type system. The WebSocket
-integration in FastAPI allows us to build real‑time applications with low
-latency【747392896601809†L41-L69】. For concurrency, we rely on Python’s
-asyncio event loop and manage tasks with care.
-
-  The server expone dos WebSocket:
-    - `/ws/board/{id}` : usado por los nodos ESP32 (sensores y actuador) para
-      enviar datos y recibir comandos directamente.
-    - `/ws/client` : utilizado por los clientes web para visualizar datos y
-      enviar configuración o comandos manuales.
-
-The server stores configuration and state in JSON files and uses background
-tasks to monitor timeouts and ensure fail‑safe behaviour.
-"""
-
-from __future__ import annotations
-
-import asyncio
-import json
-import logging
-import os
-import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+import asyncio, json, time, os, re
+from typing import Dict, Any, Optional, List
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, validator
-from typing import Literal
+from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel, Field, field_validator
 
-# ---------------------------------------------------------------------------
-# Pydantic models for messages
+APP_DIR = os.path.dirname(__file__)
+ROOT_DIR = os.path.abspath(os.path.join(APP_DIR, ".."))
+WEB_DIR = os.path.join(ROOT_DIR, "webui")
+DB_DIR = os.path.join(ROOT_DIR, "db")
+os.makedirs(DB_DIR, exist_ok=True)
 
-class SensorItem(BaseModel):
-    id: str
-    dist_mm: int
-    level_pct: float
+CFG_PATH = os.path.join(DB_DIR, "config.json")
+EVENTS_PATH = os.path.join(DB_DIR, "events.log")
+HISTORY_PATH = os.path.join(DB_DIR, "history.jsonl")
+PROFILES_PATH = os.path.join(DB_DIR, "profiles.json")
+BOARDS_CACHE_PATH = os.path.join(DB_DIR, "boards.json")
 
-class SensorDataMessage(BaseModel):
-    # Use Literal for constant fields; Pydantic v2 removed 'const'
-    type: Literal["sensor_data"] = "sensor_data"
-    src: str
-    seq: int
-    items: List[SensorItem]
-    rssi: Optional[int] = None
-    timestamp: float = Field(default_factory=lambda: time.time())
-
-class AckMessage(BaseModel):
-    type: Literal["ack"] = "ack"
-    from_: str = Field(..., alias="from")  # `from` is reserved in Python
-    state: str
-    reason: Optional[str] = None
-
-class StatusMessage(BaseModel):
-    type: Literal["status"] = "status"
-    board: str
-    state: str
-
-class CommandMessage(BaseModel):
-    type: Literal["cmd"] = "cmd"
-    dst: str
-    cmd: str
-    value: str
-    ttl_ms: Optional[int] = None
-    reason: Optional[str] = None
-
-    @validator("dst")
-    def dst_upper(cls, v: str) -> str:
-        return v.upper()
-
-class ConfigSetMessage(BaseModel):
-    type: Literal["config_set"] = "config_set"
-    target: str
-    payload: Dict[str, float]
-
-class HeartbeatMessage(BaseModel):
-    type: Literal["hb"] = "hb"
-    from_: str = Field(..., alias="from")
-
-# ---------------------------------------------------------------------------
-# Configuration and state management
-
-BASE_DIR = Path(__file__).resolve().parent
-CONFIG_FILE = BASE_DIR / "config.json"
-STATE_FILE = BASE_DIR / "state.json"
-
-# Default configuration.  The system uses separate calibration values
-# for each ultrasonic sensor: when the tanks are empty or full.  The
-# `empty_*_mm` values correspond to the measured distance from sensor to
-# liquid surface when the container is empty.  The `full_*_mm` values
-# correspond to the distance when the container is full.  These values
-# allow conversion of raw distance to percentage level on the sensor node.
-default_config: Dict[str, Any] = {
-    "empty_tanque_mm": 1200.0,
-    "full_tanque_mm": 200.0,
-    "empty_tolva_mm": 800.0,
-    "full_tolva_mm": 100.0,
-    "SP_tolva": 60.0,
-    "hysteresis": 5.0,
-    "min_on_s": 5.0,
-    "min_off_s": 5.0,
-    "max_run_s": 300.0,
-    "mode": "AUTO",
-    "pulse_rate": 1.0  # pulses per minute when pump is on
-}
-
-# Utility functions to load and save JSON config/state
-
-def load_json(path: Path, defaults: Dict[str, Any]) -> Dict[str, Any]:
-    if path.exists():
-        try:
-            data = json.loads(path.read_text())
-            for k, v in defaults.items():
-                data.setdefault(k, v)
-            return data
-        except Exception:
-            logging.exception("Failed to load %s; using defaults", path)
-    return defaults.copy()
-
-def save_json(path: Path, data: Dict[str, Any]) -> None:
+def log_event(msg: str):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {msg}"
+    print(line)
     try:
-        path.write_text(json.dumps(data))
-    except Exception:
-        logging.exception("Failed to save %s", path)
+        with open(EVENTS_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        print("log error:", e)
 
-# ---------------------------------------------------------------------------
-# Board state classes
+def clamp(v,a,b): return max(a, min(b, v))
 
-@dataclass
-class BoardState:
-    """Represents state of an individual board (sensor or actuator)."""
-    online: bool = False
-    last_seen: float = 0.0
-    rssi: Optional[int] = None
-    pump_state: Optional[bool] = None  # only for actuator board
+class SensorCal(BaseModel):
+    empty_mm: int = Field(800, ge=50, le=10000)
+    full_mm: int = Field(200, ge=10, le=9999)
+    target_pct: float = Field(65.0, ge=5, le=95)
+    hysteresis_pct: float = Field(5.0, ge=1, le=20)
+    @field_validator("full_mm")
+    @classmethod
+    def check_order(cls, v, info):
+        empty = info.data.get("empty_mm")
+        if empty is not None and v >= empty:
+            raise ValueError("full_mm debe ser menor que empty_mm")
+        return v
 
-    def update_seen(self, rssi: Optional[int] = None) -> None:
-        self.online = True
-        self.last_seen = time.time()
-        if rssi is not None:
-            self.rssi = rssi
+class AutoCfg(BaseModel):
+    anti_spill_margin_pct: float = Field(1.2, ge=0.0, le=10.0)
+    ema_alpha: float = Field(0.2, ge=0.05, le=0.9)
+    tank_low_lock_pct: float = Field(15.0, ge=0.0, le=50.0)
 
+class TankCfg(BaseModel):
+    cal: SensorCal = Field(default_factory=SensorCal)
 
-class BoardManager:
-    """Manages all boards (sensor, actuator, master)."""
+class HopperCfg(BaseModel):
+    cal: SensorCal = Field(default_factory=SensorCal)
 
-    def __init__(self, config: Dict[str, Any]):
-        self.boards: Dict[str, BoardState] = {
-            "SENS": BoardState(),
-            "ACT": BoardState()
-        }
-        # sensor levels (percentage) and raw distances (mm)
-        self.tanque_pct: Optional[float] = None
-        self.tolva_pct: Optional[float] = None
-        self.tanque_mm: Optional[int] = None
-        self.tolva_mm: Optional[int] = None
-        self.config = config
-        self._lock = asyncio.Lock()
-        self.pump_run_start: Optional[float] = None  # track pump run duration
+class NetCfg(BaseModel):
+    allowed_origins: List[str] = Field(default_factory=lambda: ["http://192.168.1.68:8000","http://localhost:8000","http://127.0.0.1:8000"])
+    board_tokens: Dict[str,str] = Field(default_factory=lambda: {
+        "ACT-01": "test_ws_board_2025_ABCDEF",
+        "SENS_TANQUE": "test_ws_board_2025_ABCDEF",
+        "SENS_TOLVA": "test_ws_board_2025_ABCDEF",
+    })
+    board_auto_register: bool = True
+    api_key: str = "DEVKEY123"
 
-    async def handle_sensor(self, msg: SensorDataMessage) -> None:
-        async with self._lock:
-            self.boards["SENS"].update_seen(msg.rssi)
-            # update levels
-            for item in msg.items:
-                if item.id.upper() == "TANQUE":
-                    # store raw distance and percentage level
-                    self.tanque_pct = item.level_pct
-                    self.tanque_mm = item.dist_mm
-                elif item.id.upper() == "TOLVA":
-                    self.tolva_pct = item.level_pct
-                    self.tolva_mm = item.dist_mm
+class AppCfg(BaseModel):
+    tank: TankCfg = Field(default_factory=TankCfg)
+    hopper: HopperCfg = Field(default_factory=HopperCfg)
+    auto: AutoCfg = Field(default_factory=AutoCfg)
+    net: NetCfg = Field(default_factory=NetCfg)
 
-    async def handle_ack(self, msg: AckMessage) -> None:
-        async with self._lock:
-            board_id = msg.from_
-            if board_id in self.boards:
-                self.boards[board_id].update_seen()
-                if board_id == "ACT":
-                    self.boards[board_id].pump_state = (msg.state == "ON")
-                    # track pump run start/stop
-                    if msg.state == "ON":
-                        if self.pump_run_start is None:
-                            self.pump_run_start = time.time()
-                    else:
-                        self.pump_run_start = None
+class SensorState(BaseModel):
+    raw_mm: float = 0.0
+    filtered_pct: float = 0.0
+    last_ts: float = 0.0
 
-    async def handle_status(self, msg: StatusMessage) -> None:
-        async with self._lock:
-            board_id = msg.board
-            if board_id in self.boards:
-                self.boards[board_id].online = (msg.state != "OFFLINE")
+class AutoModel(BaseModel):
+    ema_run_s: float = 0.0
+    ema_slope_pct_s: float = 0.0
+    ema_inertia_s: float = 0.0
+    ema_overshoot_pct: float = 0.0
 
-    def get_state_snapshot(self) -> Dict[str, Any]:
-        """Return a snapshot of the current state."""
-        snapshot = {
-            "tanque_pct": self.tanque_pct,
-            "tolva_pct": self.tolva_pct,
-            "tanque_mm": self.tanque_mm,
-            "tolva_mm": self.tolva_mm,
-            "pump_state": self.boards["ACT"].pump_state,
-            "boards": {
-                k: {
-                    "online": v.online,
-                    "last_ts": v.last_seen,
-                    "rssi": v.rssi,
-                    "pump_state": v.pump_state
-                }
-                for k, v in self.boards.items()
-            }
-        }
-        return snapshot
+class ActuatorState(BaseModel):
+    board_id: str = "ACT-01"
+    pump_on: bool = False
+    on_ms: int = 100
+    off_ms: int = 233
+    pulses_total: int = 0
+    runtime_ms_total: int = 0
+    last_command_ts: float = 0.0
+    ttl_ms: int = 30000
 
-    async def monitor_boards(self, send_offline_cb) -> None:
-        """Monitor boards and trigger callbacks if they go offline."""
-        SENSOR_TIMEOUT = 5  # seconds
-        ACT_TIMEOUT = 5
-        while True:
-            now = time.time()
-            async with self._lock:
-                for name, timeout in {"SENS": SENSOR_TIMEOUT, "ACT": ACT_TIMEOUT}.items():
-                    board = self.boards[name]
-                    if board.online and (now - board.last_seen > timeout):
-                        board.online = False
-                        await send_offline_cb(name)
-                        if name == "ACT":
-                            board.pump_state = False
-                            self.pump_run_start = None
-            await asyncio.sleep(1)
+class BoardsView(BaseModel):
+    board_id: str
+    name: str
+    kind: str
+    online: bool
+    last_ip: Optional[str] = None
+    last_seen: Optional[float] = None
+    ws_url: Optional[str] = None
+    token: Optional[str] = None
 
+class AppState(BaseModel):
+    mode: str = "MANUAL_OFF"
+    actuator: ActuatorState = Field(default_factory=ActuatorState)
+    tank: SensorState = Field(default_factory=SensorState)
+    hopper: SensorState = Field(default_factory=SensorState)
+    auto_model: AutoModel = Field(default_factory=AutoModel)
 
-# Control logic for automatic pump control
+def load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f: return json.load(f)
+    except: return default
 
-class ControlLogic:
-    def __init__(self, board_manager: BoardManager, send_command_cb):
-        self.manager = board_manager
-        self.send_command = send_command_cb
-        self.last_action_time: float = 0.0
-        self.pump_state: bool = False
+def save_json(path, data):
+    tmp = path + ".tmp"
+    with open(tmp,"w",encoding="utf-8") as f: json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
 
-    async def control_loop(self) -> None:
-        while True:
-            await asyncio.sleep(0.2)  # check 5 times per second
-            config = self.manager.config
-            if config.get("mode") != "AUTO":
-                continue
-            snapshot = self.manager.get_state_snapshot()
-            tanque = snapshot["tanque_pct"]
-            tolva = snapshot["tolva_pct"]
-            pump_state = snapshot["pump_state"]
-            permit = tanque is not None and tanque > 0.0
-            if tolva is None:
-                continue
-            sp = config["SP_tolva"]
-            hyster = config["hysteresis"]
-            low_th = sp - hyster
-            high_th = sp + hyster
-            now = time.time()
-            # rules
-            if permit and not pump_state and tolva < low_th:
-                # start pump
-                await self.send_command(CommandMessage(dst="ACT", cmd="PUMP", value="ON", ttl_ms=int(config["max_run_s"] * 1000), reason="AUTO_START"))
-                self.last_action_time = now
-            elif (not permit or tolva > high_th) and pump_state and (now - self.last_action_time) > config["min_on_s"]:
-                # stop pump
-                await self.send_command(CommandMessage(dst="ACT", cmd="PUMP", value="OFF", ttl_ms=3000, reason="AUTO_STOP"))
-                self.last_action_time = now
+CFG = AppCfg(**load_json(CFG_PATH, {}))
+if not os.path.exists(CFG_PATH): save_json(CFG_PATH, json.loads(CFG.model_dump_json()))
+STATE = AppState()
 
+app = FastAPI(title="TanqueNivel Industrial", version="UX13")
+app.add_middleware(CORSMiddleware, allow_origins=CFG.net.allowed_origins or ["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
-# ---------------------------------------------------------------------------
-# FastAPI application
+def normalize_origin(o:str)->str:
+    o=o.strip()
+    if not re.match(r"^https?://", o): o = "http://" + o
+    return o
 
-app = FastAPI(title="Professional Tank Level Control Server")
+from fastapi import Header
+def require_api_key(x_api_key: Optional[str] = Header(None)):
+    if not x_api_key or x_api_key != CFG.net.api_key:
+        raise HTTPException(401, "API key inválida")
+    return True
 
-# Load initial config and state
-CONFIG = load_json(CONFIG_FILE, default_config)
-STATE_DATA = load_json(STATE_FILE, {})
+@app.get("/", response_class=HTMLResponse)
+async def index(): return FileResponse(os.path.join(WEB_DIR, "index.html"))
 
-# Instantiate board manager and control logic
-board_manager = BoardManager(CONFIG)
-control_logic = ControlLogic(board_manager, lambda cmd: asyncio.create_task(send_message_to_board(cmd.dst, cmd)))
+@app.get("/api/diag")
+async def api_diag(_:bool=Depends(require_api_key)):
+    return {"alive": True, "version": app.version, "allowed_origins": CFG.net.allowed_origins}
 
-# Set up static files for UI
-static_dir = Path(__file__).parent / "static"
-static_dir.mkdir(exist_ok=True)
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+def pct_from_mm(mm:float, cal:SensorCal)->float:
+    rng = float(cal.empty_mm - cal.full_mm)
+    if rng <= 0: return 0.0
+    return clamp((cal.empty_mm - float(mm)) * 100.0 / rng, 0.0, 100.0)
 
-board_sockets: Dict[str, WebSocket] = {}  # WebSocket per board
-client_sockets: List[WebSocket] = []   # connected UI clients
+@app.get("/api/state")
+async def api_state(_:bool=Depends(require_api_key)):
+    return {"cfg": json.loads(CFG.model_dump_json()), "state": json.loads(STATE.model_dump_json())}
 
-# Logging configuration
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
+# ---------- Boards/Equipos ----------
 
+class BoardsRegisterReq(BaseModel):
+    board_id: str
+    token: str
+    name: Optional[str] = None
+    kind: Optional[str] = None
 
-@app.get("/")
-async def index() -> HTMLResponse:
-    index_path = static_dir / "index.html"
-    if not index_path.exists():
-        # write a default UI if missing
-        html = """<!DOCTYPE html>
-<html><head><meta charset='UTF-8'><title>Tank Level Control</title>
-<style>body{font-family:Arial;margin:20px;}#status{margin-bottom:10px;} .online{color:green;} .offline{color:red;}</style>
-</head><body><h1>Tank Level Control</h1>
-<div id='status'>Connecting...</div>
-<div id='controls'>
-  Mode: <select id='mode'>
-    <option value='AUTO'>AUTO</option>
-    <option value='MANUAL'>MANUAL</option>
-  </select>
-  <button id='pumpOn'>Pump ON</button>
-  <button id='pumpOff'>Pump OFF</button>
-  <br/><label>SP tolva (%): <input type='number' id='sp' value='60'></label>
-  <label>Histeresis (%): <input type='number' id='hyster' value='5'></label>
-  <button id='saveConfig'>Save Config</button>
-</div>
-<div id='levels'></div>
-<script>
-const ws = new WebSocket(`ws://${location.host}/ws/client`);
-const statusEl = document.getElementById('status');
-const levelsEl = document.getElementById('levels');
-const modeEl = document.getElementById('mode');
-ws.onopen = () => { statusEl.textContent = 'Connected to server'; };
-ws.onclose = () => { statusEl.textContent = 'Disconnected'; };
-ws.onmessage = (ev) => {
-  const msg = JSON.parse(ev.data);
-  if (msg.type === 'state') {
-    const s = msg.state;
-    const boards = s.boards;
-    let html = '';
-    html += `<p>SENS: <span class='${boards.SENS.online?'online':'offline'}'>${boards.SENS.online?'Online':'Offline'}</span></p>`;
-    html += `<p>ACT: <span class='${boards.ACT.online?'online':'offline'}'>${boards.ACT.online?'Online':'Offline'}</span></p>`;
-    if (s.tanque_pct != null) html += `<p>Tanque: ${s.tanque_pct.toFixed(1)} %</p>`;
-    if (s.tolva_pct != null) html += `<p>Tolva: ${s.tolva_pct.toFixed(1)} %</p>`;
-    html += `<p>Pump: ${s.pump_state?'ON':'OFF'}</p>`;
-    levelsEl.innerHTML = html;
-    // update controls from config
-    modeEl.value = msg.config.mode;
-    document.getElementById('sp').value = msg.config.SP_tolva;
-    document.getElementById('hyster').value = msg.config.hysteresis;
-  }
-};
-modeEl.onchange = () => {
-  fetch('/mode', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:modeEl.value})});
-};
-document.getElementById('pumpOn').onclick = () => {
-  fetch('/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cmd:'PUMP_ON'})});
-};
-document.getElementById('pumpOff').onclick = () => {
-  fetch('/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cmd:'PUMP_OFF'})});
-};
-document.getElementById('saveConfig').onclick = () => {
-  const sp = parseFloat(document.getElementById('sp').value);
-  const hyster = parseFloat(document.getElementById('hyster').value);
-  fetch('/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({SP_tolva:sp, hysteresis:hyster})});
-};
-</script></body></html>"""
-        index_path.write_text(html)
-    return HTMLResponse(index_path.read_text())
+@app.post("/api/boards")
+async def boards_register(req: BoardsRegisterReq, _:bool=Depends(require_api_key)):
+    CFG.net.board_tokens[req.board_id] = req.token
+    save_json(CFG_PATH, json.loads(CFG.model_dump_json()))
+    cache = load_json(BOARDS_CACHE_PATH, {})
+    meta = cache.get(req.board_id, {})
+    if req.name: meta["name"] = req.name
+    if req.kind: meta["kind"] = req.kind
+    cache[req.board_id] = meta
+    save_json(BOARDS_CACHE_PATH, cache)
+    log_event(f"board registered {req.board_id}")
+    return {"ok": True}
 
+@app.delete("/api/boards/{board_id}")
+async def boards_delete(board_id: str, _:bool=Depends(require_api_key)):
+    if board_id in CFG.net.board_tokens:
+        del CFG.net.board_tokens[board_id]
+        save_json(CFG_PATH, json.loads(CFG.model_dump_json()))
+    cache = load_json(BOARDS_CACHE_PATH, {})
+    cache.pop(board_id, None)
+    save_json(BOARDS_CACHE_PATH, cache)
+    log_event(f"board deleted {board_id}")
+    return {"ok": True}
 
-@app.get("/status")
-async def status() -> JSONResponse:
-    return JSONResponse({"state": board_manager.get_state_snapshot(), "config": CONFIG})
+@app.get("/api/boards")
+async def api_boards(_:bool=Depends(require_api_key)):
+    # Build view from expected tokens + cache + online
+    cache = load_json(BOARDS_CACHE_PATH, {})
+    host = CFG.net.allowed_origins[0] if CFG.net.allowed_origins else "http://192.168.1.68:8000"
+    # derive host/port for ws_url
+    m = re.match(r"^https?://([^/]+)", host)
+    ws_host = m.group(1) if m else "192.168.1.68:8000"
+    scheme_host = f"ws://{ws_host}"
+    out = []
+    # expected
+    for bid, token in CFG.net.board_tokens.items():
+        meta = cache.get(bid, {})
+        online = bid in BOARDS
+        name = meta.get("name", bid)
+        kind = meta.get("kind", "UNKNOWN")
+        last_ip = BOARDS[bid].ip if online else meta.get("ip")
+        last_seen = BOARDS[bid].last_seen if online else meta.get("last_seen")
+        out.append(BoardsView(board_id=bid, name=name, kind=kind, online=online,
+                              last_ip=last_ip, last_seen=last_seen,
+                              ws_url=f"{scheme_host}/ws/board/{bid}?token={token}", token=token).model_dump())
+    # plus online but not expected
+    for bid, c in BOARDS.items():
+        if bid not in CFG.net.board_tokens:
+            out.append(BoardsView(board_id=bid, name=c.name, kind=c.kind, online=True,
+                                  last_ip=c.ip, last_seen=c.last_seen,
+                                  ws_url=f"{scheme_host}/ws/board/{bid}?token=<unknown>", token=None).model_dump())
+    return {"boards": out}
 
+# ---------- History & Events ----------
+@app.get("/api/history")
+async def api_history(n:int=600, _:bool=Depends(require_api_key)):
+    items=[]
+    try:
+        with open(HISTORY_PATH,"r",encoding="utf-8") as f:
+            for line in f:
+                line=line.strip()
+                if line: items.append(json.loads(line))
+    except: pass
+    return {"items": items[-n:]}
 
-@app.post("/config")
-async def set_config(data: Dict[str, float]):
-    # update config keys that are allowed
-    allowed = {
-        "empty_tanque_mm", "full_tanque_mm", "empty_tolva_mm", "full_tolva_mm",
-        "SP_tolva", "hysteresis", "min_on_s", "min_off_s", "max_run_s", "pulse_rate"
-    }
-    for k, v in data.items():
-        if k in allowed:
-            CONFIG[k] = float(v)
-    save_json(CONFIG_FILE, CONFIG)
-    # if pulse rate changed, send to actuator
-    if "pulse_rate" in data:
-        await send_pulse_rate(float(data["pulse_rate"]))
-    # forward calibration values to sensor node
-    payload: Dict[str, float] = {
-        "empty_tanque_mm": CONFIG["empty_tanque_mm"],
-        "full_tanque_mm":  CONFIG["full_tanque_mm"],
-        "empty_tolva_mm":  CONFIG["empty_tolva_mm"],
-        "full_tolva_mm":   CONFIG["full_tolva_mm"]
-    }
-    cfg_msg = ConfigSetMessage(target="SENS", payload=payload)
-    await send_message_to_board("SENS", cfg_msg)
-    await broadcast_state()
-    return {"result": "ok"}
+@app.get("/api/events/tail")
+async def api_events_tail(n:int=200, _:bool=Depends(require_api_key)):
+    lines=[]
+    try:
+        with open(EVENTS_PATH,"r",encoding="utf-8") as f: lines=f.readlines()
+    except: pass
+    return {"lines":[x.strip() for x in lines[-n:]]}
 
+# ---------- Actuator control ----------
+class DutyReq(BaseModel):
+    on_ms:int=Field(100, ge=10, le=10000)
+    off_ms:int=Field(233, ge=0, le=20000)
 
-@app.post("/mode")
-async def set_mode(data: Dict[str, str]):
-    mode = data.get("mode", "AUTO").upper()
-    if mode not in {"AUTO", "MANUAL"}:
-        raise HTTPException(400, detail="Invalid mode")
-    CONFIG["mode"] = mode
-    save_json(CONFIG_FILE, CONFIG)
-    await broadcast_state()
-    return {"result": "ok"}
+@app.post("/api/actuator/duty")
+async def api_duty(req:DutyReq, _:bool=Depends(require_api_key)):
+    STATE.actuator.on_ms = req.on_ms
+    STATE.actuator.off_ms = req.off_ms
+    if STATE.actuator.board_id in BOARDS:
+        await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:set","on_ms":req.on_ms,"off_ms":req.off_ms})
+    log_event(f"duty set on={req.on_ms} off={req.off_ms}")
+    return {"ok": True, "trace": int(time.time()*1000)}
 
+class PumpReq(BaseModel):
+    value:str="ON"
+    ttl_ms:int=Field(30000, ge=500, le=600000)
+    reason:str="manual"
 
-@app.post("/command")
-async def manual_command(data: Dict[str, str]):
-    if CONFIG.get("mode") != "MANUAL":
-        raise HTTPException(400, detail="System not in MANUAL mode")
-    cmd = data.get("cmd")
-    if cmd not in {"PUMP_ON", "PUMP_OFF"}:
-        raise HTTPException(400, detail="Invalid command")
-    value = "ON" if cmd == "PUMP_ON" else "OFF"
-    if "ACT" not in board_sockets:
-        raise HTTPException(500, detail="Actuator not connected")
-    msg = CommandMessage(dst="ACT", cmd="PUMP", value=value, ttl_ms=int(CONFIG["max_run_s"] * 1000) if value == "ON" else 3000, reason="MANUAL")
-    await send_message_to_board("ACT", msg)
-    return {"result": "ok"}
+@app.post("/api/pump")
+async def api_pump(req:PumpReq, _:bool=Depends(require_api_key)):
+    v=req.value.upper().strip()
+    if v not in ("ON","OFF"): raise HTTPException(400,"value debe ser ON/OFF")
+    STATE.actuator.pump_on = (v=="ON")
+    STATE.actuator.last_command_ts = time.time()
+    STATE.actuator.ttl_ms = req.ttl_ms
+    if STATE.actuator.board_id in BOARDS:
+        await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":v})
+    log_event(f"pump {v} ttl={req.ttl_ms} reason={req.reason}")
+    return {"ok": True, "trace": int(time.time()*1000)}
 
+@app.post("/api/mode/{mode}")
+async def api_mode(mode:str, _:bool=Depends(require_api_key)):
+    mode=mode.upper()
+    if mode not in ("AUTO","MANUAL_OFF"): raise HTTPException(400,"modo inválido")
+    STATE.mode = mode
+    if mode=="MANUAL_OFF" and STATE.actuator.board_id in BOARDS:
+        await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
+    log_event(f"mode set {mode}")
+    return {"ok": True, "trace": int(time.time()*1000)}
 
-# Endpoint to set pulse rate (pulses per minute) for actuator.
-# Accepts JSON {"pulse_rate": float}. Valid range: 0.02 to 3.0 pulses/minute.
-@app.post("/pulse")
-async def set_pulse(data: Dict[str, float]):
-    if "pulse_rate" not in data:
-        raise HTTPException(400, detail="Missing pulse_rate")
-    rate = float(data["pulse_rate"])
-    if rate < 0.02 or rate > 3.0:
-        raise HTTPException(400, detail="pulse_rate out of range (0.02 - 3.0)")
-    CONFIG["pulse_rate"] = rate
-    save_json(CONFIG_FILE, CONFIG)
-    # send to actuator
-    await send_pulse_rate(rate)
-    await broadcast_state()
-    return {"result": "ok"}
+# ---------- Profiles ----------
+@app.get("/api/profiles")
+async def profiles(_:bool=Depends(require_api_key)):
+    return load_json(PROFILES_PATH, {"profiles":[]})
 
+class ProfileReq(BaseModel):
+    name:str; on_ms:int; off_ms:int
+@app.post("/api/profiles")
+async def profiles_add(req:ProfileReq, _:bool=Depends(require_api_key)):
+    data = load_json(PROFILES_PATH, {"profiles":[]})
+    data["profiles"] = [p for p in data["profiles"] if p["name"]!=req.name] + [{"name":req.name,"on_ms":req.on_ms,"off_ms":req.off_ms}]
+    save_json(PROFILES_PATH, data); log_event(f"profile saved {req.name}"); return {"ok":True}
+@app.post("/api/profiles/apply/{name}")
+async def profiles_apply(name:str, _:bool=Depends(require_api_key)):
+    data = load_json(PROFILES_PATH, {"profiles":[]})
+    for p in data["profiles"]:
+        if p["name"]==name:
+            STATE.actuator.on_ms=int(p["on_ms"]); STATE.actuator.off_ms=int(p["off_ms"])
+            if STATE.actuator.board_id in BOARDS:
+                await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:set","on_ms":STATE.actuator.on_ms,"off_ms":STATE.actuator.off_ms})
+            log_event(f"profile applied {name}"); return {"ok":True}
+    raise HTTPException(404,"perfil no encontrado")
+@app.delete("/api/profiles/{name}")
+async def profiles_del(name:str, _:bool=Depends(require_api_key)):
+    data = load_json(PROFILES_PATH, {"profiles":[]})
+    n0 = len(data["profiles"]); data["profiles"] = [p for p in data["profiles"] if p["name"]!=name]
+    save_json(PROFILES_PATH, data)
+    if len(data["profiles"])<n0: log_event(f"profile deleted {name}"); return {"ok":True}
+    raise HTTPException(404,"perfil no encontrado")
+
+# ---------- Config ----------
+class PatchCfg(BaseModel):
+    allowed_origins: Optional[List[str]] = None
+    api_key: Optional[str] = None
+    hopper: Optional[Dict[str, Any]] = None
+    tank: Optional[Dict[str, Any]] = None
+    auto: Optional[Dict[str, Any]] = None
+
+@app.patch("/api/config")
+async def patch_cfg(req:PatchCfg, _:bool=Depends(require_api_key)):
+    changes=[]
+    if req.allowed_origins is not None:
+        CFG.net.allowed_origins = [normalize_origin(x) for x in req.allowed_origins]; changes.append("allowed_origins")
+    if req.api_key:
+        CFG.net.api_key = req.api_key; changes.append("api_key")
+    if req.hopper:
+        cal = CFG.hopper.cal.model_dump(); cal.update(req.hopper.get("cal", {})); CFG.hopper.cal = SensorCal(**cal); changes.append("hopper.cal")
+    if req.tank:
+        cal = CFG.tank.cal.model_dump(); cal.update(req.tank.get("cal", {})); CFG.tank.cal = SensorCal(**cal); changes.append("tank.cal")
+    if req.auto:
+        a = CFG.auto.model_dump(); a.update(req.auto); CFG.auto = AutoCfg(**a); changes.append("auto")
+    save_json(CFG_PATH, json.loads(CFG.model_dump_json()))
+    log_event("config patched: " + ",".join(changes))
+    return {"ok":True,"trace":int(time.time()*1000)}
+
+# ---------- WebSocket Boards ----------
+class WSConn:
+    def __init__(self, ws:WebSocket, board_id:str, kind:str, name:str, ip:str):
+        self.ws=ws; self.board_id=board_id; self.kind=kind; self.name=name; self.ip=ip; self.last_seen=time.time()
+BOARDS: Dict[str, WSConn] = {}
 
 @app.websocket("/ws/board/{board_id}")
-async def ws_board(ws: WebSocket, board_id: str):
-    board_id = board_id.upper()
-    await ws.accept()
-    board_sockets[board_id] = ws
-    logging.info("Board %s connected", board_id)
-    if board_id in board_manager.boards:
-        board_manager.boards[board_id].update_seen()
-    await broadcast_state()
+async def ws_board(websocket:WebSocket, board_id:str):
+    await websocket.accept()
+    ip = getattr(websocket.client, "host", "unknown")
+    try:
+        msg = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
+    except Exception:
+        await websocket.close(code=4400); log_event(f"WS {board_id} no_hello"); return
+    if msg.get("type")!="hello":
+        await websocket.close(code=4400); log_event(f"WS {board_id} bad_hello"); return
+    token = msg.get("token",""); expected = CFG.net.board_tokens.get(board_id)
+    if expected is None and CFG.net.board_auto_register:
+        CFG.net.board_tokens[board_id]=token; save_json(CFG_PATH, json.loads(CFG.model_dump_json())); expected=token; log_event(f"auto-registered {board_id}")
+    if token != expected:
+        await websocket.close(code=4401); log_event(f"WS {board_id} token_mismatch"); return
+    conn = WSConn(websocket, board_id, msg.get("kind","UNKNOWN"), msg.get("name",board_id), ip)
+    BOARDS[board_id] = conn
+    cache = load_json(BOARDS_CACHE_PATH, {}); cache[board_id]={"name":conn.name,"kind":conn.kind,"ip":ip,"last_seen":time.time()}; save_json(BOARDS_CACHE_PATH, cache)
+    log_event(f"WS accepted {board_id} {conn.kind}")
+    # Push estado actual del actuador si aplica
+    if board_id == STATE.actuator.board_id and conn.kind.upper()=="ACTUATOR":
+        await websocket.send_json({"type":"actuator:set","on_ms":STATE.actuator.on_ms,"off_ms":STATE.actuator.off_ms})
+        await websocket.send_json({"type":"actuator:pump","value":"ON" if STATE.actuator.pump_on else "OFF"})
     try:
         while True:
-            data = await ws.receive_text()
-            try:
-                parsed = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            msg_type = parsed.get("type")
-            if msg_type == "hb":
-                if board_id in board_manager.boards:
-                    board_manager.boards[board_id].update_seen()
-                continue
-            if msg_type == "sensor_data":
-                try:
-                    msg = SensorDataMessage(**parsed)
-                    await board_manager.handle_sensor(msg)
-                    await broadcast_state()
-                    continue
-                except Exception as e:
-                    logging.warning("Invalid sensor_data: %s", e)
-            if msg_type == "ack":
-                try:
-                    msg = AckMessage(**parsed)
-                    await board_manager.handle_ack(msg)
-                    await broadcast_state()
-                    continue
-                except Exception as e:
-                    logging.warning("Invalid ack: %s", e)
-            if msg_type == "status":
-                try:
-                    msg = StatusMessage(**parsed)
-                    await board_manager.handle_status(msg)
-                    await broadcast_state()
-                    continue
-                except Exception as e:
-                    logging.warning("Invalid status: %s", e)
-            await broadcast_message({"from_board": {"id": board_id, "msg": parsed}})
-    except WebSocketDisconnect:
-        logging.info("Board %s disconnected", board_id)
-    finally:
-        board_sockets.pop(board_id, None)
-        if board_id in board_manager.boards:
-            board_manager.boards[board_id].online = False
-        await broadcast_state()
-
-
-# WebSocket endpoint for clients
-@app.websocket("/ws/client")
-async def ws_client(ws: WebSocket):
-    await ws.accept()
-    client_sockets.append(ws)
-    await send_initial_state(ws)
-    try:
-        while True:
-            await ws.receive_text()  # we ignore client messages; they use REST
+            data = await websocket.receive_json()
+            t = data.get("type"); conn.last_seen=time.time()
+            if t=="sensor":
+                sid=data.get("sensor_id"); mm=float(data.get("mm",0.0)); ts=time.time()
+                if sid=="tank":
+                    STATE.tank.raw_mm=mm; STATE.tank.filtered_pct=pct_from_mm(mm, CFG.tank.cal); STATE.tank.last_ts=ts
+                elif sid=="hopper":
+                    STATE.hopper.raw_mm=mm; STATE.hopper.filtered_pct=pct_from_mm(mm, CFG.hopper.cal); STATE.hopper.last_ts=ts
+            elif t=="actuator:stats":
+                STATE.actuator.pulses_total=int(data.get("pulses_total",STATE.actuator.pulses_total))
+                STATE.actuator.runtime_ms_total=int(data.get("runtime_ms_total",STATE.actuator.runtime_ms_total))
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        log_event(f"WS error {board_id}: {e}")
     finally:
-        client_sockets.remove(ws)
+        BOARDS.pop(board_id, None); log_event(f"WS closed {board_id}")
 
-
-# Utility: broadcast full state to all clients
-async def broadcast_state() -> None:
-    state_snapshot = board_manager.get_state_snapshot()
-    message = json.dumps({"type": "state", "state": state_snapshot, "config": CONFIG})
-    for ws in list(client_sockets):
+# ---------- Background ----------
+async def history_loop():
+    last_p=0; last_r=0
+    while True:
+        await asyncio.sleep(2.0)
+        # TTL safety
+        if STATE.actuator.pump_on and STATE.actuator.ttl_ms>0 and (time.time()-STATE.actuator.last_command_ts)*1000 > STATE.actuator.ttl_ms:
+            STATE.actuator.pump_on=False
+            if STATE.actuator.board_id in BOARDS:
+                try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
+                except: pass
+            log_event("TTL cutoff pump OFF")
+        pulses_delta=max(0, STATE.actuator.pulses_total-last_p); runtime_delta=max(0, STATE.actuator.runtime_ms_total-last_r)
+        last_p=STATE.actuator.pulses_total; last_r=STATE.actuator.runtime_ms_total
+        item={"ts":time.time(),"pulses":float(pulses_delta),"runtime_s":float(runtime_delta)/1000.0,
+              "pump_on":1.0 if STATE.actuator.pump_on else 0.0, "tank_pct":float(STATE.tank.filtered_pct),
+              "hopper_pct":float(STATE.hopper.filtered_pct),"on_ms":int(STATE.actuator.on_ms),"off_ms":int(STATE.actuator.off_ms),
+              "hz": (1000.0/max(1.0, STATE.actuator.on_ms + STATE.actuator.off_ms)) if STATE.actuator.pump_on else 0.0,
+              "duty": (100.0 * (STATE.actuator.on_ms / max(1.0, (STATE.actuator.on_ms + STATE.actuator.off_ms)))) }
         try:
-            await ws.send_text(message)
-        except Exception:
-            client_sockets.remove(ws)
-
-
-# Utility: send initial state/config to a new client
-async def send_initial_state(ws: WebSocket) -> None:
-    state_snapshot = board_manager.get_state_snapshot()
-    await ws.send_text(json.dumps({"type": "state", "state": state_snapshot, "config": CONFIG}))
-
-
-# Utility: broadcast arbitrary message (e.g., logs) to clients
-async def broadcast_message(msg: Dict[str, Any]) -> None:
-    data = json.dumps({"type": "msg", "payload": msg})
-    for ws in list(client_sockets):
-        try:
-            await ws.send_text(data)
-        except Exception:
-            client_sockets.remove(ws)
-
-
-# Utility to send a message to a specific board if connected
-async def send_message_to_board(dst: str, msg: BaseModel) -> None:
-    ws = board_sockets.get(dst)
-    if ws:
-        await ws.send_text(msg.json(by_alias=True))
-
-# Helper to send new pulse rate to actuator
-async def send_pulse_rate(rate: float) -> None:
-    msg = ConfigSetMessage(target="ACT", payload={"pulse_rate": rate})
-    await send_message_to_board("ACT", msg)
-
+            with open(HISTORY_PATH,"a",encoding="utf-8") as f: f.write(json.dumps(item)+"\n")
+        except Exception as e: log_event(f"history write err {e}")
+        # AUTO
+        if STATE.mode=="AUTO":
+            targ = CFG.hopper.cal.target_pct; hyst = CFG.hopper.cal.hysteresis_pct; guard = CFG.auto.anti_spill_margin_pct
+            tank_ok = STATE.tank.filtered_pct > CFG.auto.tank_low_lock_pct
+            if tank_ok and STATE.hopper.filtered_pct < (targ - hyst):
+                if not STATE.actuator.pump_on:
+                    STATE.actuator.pump_on=True; STATE.actuator.last_command_ts=time.time()
+                    if STATE.actuator.board_id in BOARDS:
+                        try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"ON"})
+                        except: pass
+                    log_event("AUTO: pump ON")
+            if STATE.hopper.filtered_pct >= (targ + guard):
+                if STATE.actuator.pump_on:
+                    STATE.actuator.pump_on=False
+                    if STATE.actuator.board_id in BOARDS:
+                        try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
+                        except: pass
+                    log_event("AUTO: pump OFF")
 
 @app.on_event("startup")
-async def on_startup() -> None:
-    # start monitoring tasks
-    asyncio.create_task(board_manager.monitor_boards(on_board_offline))
-    asyncio.create_task(control_logic.control_loop())
-    logging.info("Server startup complete")
-
-
-# Callback when a board goes offline
-async def on_board_offline(board_name: str) -> None:
-    logging.warning("Board %s offline", board_name)
-    # when actuator goes offline, ensure pump is off
-    if board_name == "ACT":
-        # send stop command (no TTL because board offline, so not necessary)
-        # we still update state
-        board_manager.boards["ACT"].pump_state = False
-    await broadcast_state()
-
-
-@app.on_event("shutdown")
-async def on_shutdown() -> None:
-    save_json(STATE_FILE, board_manager.get_state_snapshot())
-    logging.info("Server shutdown; state saved")
+async def on_start():
+    for p, init in [(EVENTS_PATH,""),(HISTORY_PATH,""),(PROFILES_PATH,'{"profiles":[]}'),(BOARDS_CACHE_PATH,"{}")]:
+        if not os.path.exists(p):
+            with open(p,"w",encoding="utf-8") as f: f.write(init)
+    asyncio.create_task(history_loop())
+    log_event("server started")
