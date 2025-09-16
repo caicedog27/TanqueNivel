@@ -7,7 +7,44 @@ const Manual={on:false,setButton(on){this.on=!!on;const b=$('#btnManual'); b.cla
 const Auto={on:false,setButton(on){this.on=!!on;const b=$('#btnAuto'); b.classList.toggle('on',this.on); b.querySelector('.label').textContent=this.on?'Parar':'Iniciar';},async toggle(){try{const r=await API.post('/api/mode/'+(this.on?'MANUAL_OFF':'AUTO')); this.setButton(!this.on); await Dash.refresh(); toast('Modo cambiado','ok',r.trace);}catch(e){toast('No se pudo cambiar modo','err',e.trace)}},async apply(){const target=parseFloat($('#targetPct').value||'65'); const hyst=parseFloat($('#hystPct').value||'5'); const guard=parseFloat($('#spillGuard').value||'1.2'); const lock=parseFloat($('#tankLowLock').value||'15'); try{const r=await API.patch('/api/config',{hopper:{cal:{target_pct:target,hysteresis_pct:hyst}}, auto:{anti_spill_margin_pct:guard,tank_low_lock_pct:lock}}); toast('Automático actualizado','ok',r.trace); await Dash.refresh();}catch(e){toast('No se pudo actualizar AUTO','err',e.trace)}}};
 const Calibration={async refresh(){try{const r=await API.get('/api/state'); const cfg=r.cfg; $('#tankEmpty').value=cfg.tank.cal.empty_mm; $('#tankFull').value=cfg.tank.cal.full_mm; $('#hopEmpty').value=cfg.hopper.cal.empty_mm; $('#hopFull').value=cfg.hopper.cal.full_mm;}catch(e){toast('No se pudo leer calibración','err',e.trace)}},async save(){const te=parseInt($('#tankEmpty').value||'800',10); const tf=parseInt($('#tankFull').value||'200',10); const he=parseInt($('#hopEmpty').value||'800',10); const hf=parseInt($('#hopFull').value||'200',10); if(!(te>tf)) return toast('Tanque: Vacío debe ser mayor a Lleno','err'); if(!(he>hf)) return toast('Tolva: Vacío debe ser mayor a Lleno','err'); try{const r=await API.patch('/api/config',{tank:{cal:{empty_mm:te,full_mm:tf}}, hopper:{cal:{empty_mm:he,full_mm:hf}}}); toast('Calibración guardada','ok',r.trace); await Dash.refresh();}catch(e){toast('Error guardando calibración','err',e.detail||e.trace)}}};
 const Profiles={async refresh(){try{const r=await API.get('/api/profiles'); const box=$('#profilesList'); box.innerHTML=''; (r.profiles||[]).forEach(p=>{const div=document.createElement('div'); div.className='item'; div.innerHTML=`<span class="name">${p.name}</span><span class="badge">${p.on_ms}/${p.off_ms} ms</span><span><button class="ghost" data-apply="${p.name}">Aplicar</button><button class="ghost" data-del="${p.name}">Borrar</button></span>`; box.appendChild(div);}); box.onclick=async ev=>{const b=ev.target.closest('button'); if(!b) return; if(b.dataset.apply){try{await API.post('/api/profiles/apply/'+b.dataset.apply,{}); toast('Perfil aplicado'); await Dash.refresh();}catch(e){toast('Error al aplicar','err',e.trace)}} else if(b.dataset.del){try{await API.del('/api/profiles/'+b.dataset.del); toast('Perfil eliminado'); await Profiles.refresh();}catch(e){toast('Error al eliminar','err',e.trace)}}};}catch(e){toast('No se pudieron leer perfiles','err',e.trace)}}, async save(){const name=($('#profName').value||'').trim(); const on_ms=parseInt($('#profOn').value||'100',10); const off_ms=parseInt($('#profOff').value||'233',10); if(!name) return toast('Pon un nombre de perfil','err'); try{await API.post('/api/profiles',{name,on_ms,off_ms}); toast('Perfil guardado'); await Profiles.refresh();}catch(e){toast('No se pudo guardar perfil','err',e.trace)}}};
-const Boards={async refresh(){try{const r=await API.get('/api/boards'); const box=$('#boardsList'); box.innerHTML=''; (r.boards||[]).forEach(b=>{const card=document.createElement('div'); card.className='card glass'; const st=b.online?'ok':''; const seen=b.last_seen?new Date(b.last_seen*1000).toLocaleString():''; card.innerHTML=`<h3>${b.name||b.board_id} <span class="badge ${st}">${b.online?'Online':'Offline'}</span></h3><ul class="kv"><li><span>ID</span><b>${b.board_id}</b></li><li><span>Tipo</span><b>${b.kind}</b></li><li><span>IP</span><b>${b.last_ip||'-'}</b></li><li><span>WS</span><b class="wsurl">${b.ws_url||''}</b></li><li><span>Token</span><b>${b.token||'-'}</b></li></ul>`; box.appendChild(card);}); }catch(e){toast('Error leyendo equipos','err',e.trace);}},
+const Boards={async refresh(){
+  try{
+    const r=await API.get('/api/boards');
+    const box=$('#boardsList'); box.innerHTML='';
+    (r.boards||[]).forEach(b=>{
+      const card=document.createElement('div'); card.className='card glass';
+      const status=(b.status)|| (b.online?'online':'offline');
+      const statusLabel=status==='online'?'Online':(status==='stale'?'Reciente':'Offline');
+      const badge=status==='online'?'ok':(status==='stale'?'warn':'err');
+      const lastSeen=b.last_seen?new Date(b.last_seen*1000).toLocaleString():'';
+      const wifiQuality=typeof b.wifi_quality==='number'?`${b.wifi_quality.toFixed(0)}%`:null;
+      const wifiRssi=typeof b.wifi_rssi==='number'?`${b.wifi_rssi.toFixed(0)} dBm`:null;
+      const wifiComposite=wifiQuality&&wifiRssi?`${wifiQuality} (${wifiRssi})`:(wifiQuality||wifiRssi||'');
+      let wifiStr='-';
+      if(b.wifi_connected===false){ wifiStr=wifiComposite?`Sin enlace (${wifiComposite})`:'Sin enlace'; }
+      else if(wifiComposite){ wifiStr=wifiComposite; }
+      const wifiLast=b.wifi_last_ts?new Date(b.wifi_last_ts*1000).toLocaleString():'';
+      const connectedSince=b.connected_since?new Date(b.connected_since*1000).toLocaleString():'';
+      const wifiRetries=b.wifi_reconnects??'-';
+      const wsUrl=b.ws_url||'';
+      const token=b.token||'-';
+      card.innerHTML=`<h3>${b.name||b.board_id} <span class="badge ${badge}">${statusLabel}</span></h3>
+      <ul class="kv">
+        <li><span>ID</span><b>${b.board_id}</b></li>
+        <li><span>Tipo</span><b>${b.kind||'UNKNOWN'}</b></li>
+        <li><span>IP</span><b>${b.last_ip||'-'}</b></li>
+        <li><span>Último mensaje</span><b>${lastSeen||'-'}</b></li>
+        <li><span>WiFi</span><b>${wifiStr}</b></li>
+        <li><span>Reintentos WiFi</span><b>${wifiRetries}</b></li>
+        <li><span>Última señal</span><b>${wifiLast||'-'}</b></li>
+        <li><span>Conectado desde</span><b>${connectedSince||'-'}</b></li>
+        <li><span>WS</span><b class="wsurl">${wsUrl}</b></li>
+        <li><span>Token</span><b>${token}</b></li>
+      </ul>`;
+      box.appendChild(card);
+    });
+  }catch(e){toast('Error leyendo equipos','err',e.trace);}
+},
   async add(){ const id=($('#newBoardId').value||'').trim(); const tok=($('#newBoardTok').value||'').trim(); const nm=($('#newBoardName').value||'').trim(); const kd=$('#newBoardKind').value || null; if(!id||!tok) return toast('ID y Token son obligatorios','err'); try{await API.post('/api/boards',{board_id:id, token:tok, name:nm||undefined, kind:kd||undefined}); toast('Equipo agregado'); await Boards.refresh();}catch(e){toast('No se pudo agregar','err',e.trace)} }
 };
 const Events={async refresh(){try{const r=await API.get('/api/events/tail?n=200'); $('#eventsTail').textContent=(r.lines||[]).join('\n');}catch(e){}}};

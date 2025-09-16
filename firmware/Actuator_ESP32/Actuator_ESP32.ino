@@ -20,6 +20,10 @@ bool pump_on = false;
 uint32_t on_ms = 100, off_ms = 233;
 uint32_t last_toggle_ms = 0; bool pulse_state = false;
 uint32_t pulses_total = 0, runtime_ms_total = 0, last_runtime_tick = 0, last_stats_send = 0;
+uint32_t last_wifi_report = 0, wifiReconnects = 0, lastWifiAttempt = 0;
+bool wifiInit = false;
+
+int wifiQuality(int32_t rssi){ if(rssi<=-100) return 0; if(rssi>=-50) return 100; return 2*(rssi+100); }
 
 void setup_wdt(){
   esp_task_wdt_config_t cfg = { .timeout_ms = 10000, .idle_core_mask = (1<<portNUM_PROCESSORS)-1, .trigger_panic = true };
@@ -29,16 +33,38 @@ void setup_wdt(){
 }
 
 void ensureWiFi(){
-  if (WiFi.status() == WL_CONNECTED) return;
-  WiFi.mode(WIFI_STA); WiFi.begin(WIFI_SSID, WIFI_PASS);
+  wl_status_t status = WiFi.status();
+  if (status == WL_CONNECTED) return;
+  uint32_t now = millis();
+  if(!wifiInit){ WiFi.mode(WIFI_STA); WiFi.persistent(false); WiFi.setSleep(false); WiFi.setAutoReconnect(true); wifiInit = true; }
+  if(now - lastWifiAttempt < 500) return;
+  lastWifiAttempt = now;
+  if(status == WL_CONNECT_FAILED || status == WL_CONNECTION_LOST || status == WL_NO_SSID_AVAIL || status == WL_DISCONNECTED){ WiFi.disconnect(false, true); delay(50); }
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  wifiReconnects++;
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000){
     esp_task_wdt_reset();
-    delay(120);
+    delay(150);
   }
 }
 
 void wsSendJson(DynamicJsonDocument &d){ String out; serializeJson(d, out); ws.sendTXT(out); }
+
+void sendWifiStatus(){
+  if(!ws.isConnected()) return;
+  DynamicJsonDocument d(256);
+  d["type"]="wifi:status";
+  wl_status_t st = WiFi.status();
+  int32_t rssi = (st==WL_CONNECTED)?WiFi.RSSI():-120;
+  d["rssi"]=rssi;
+  d["quality"]=wifiQuality(rssi);
+  d["reconnects"]=wifiReconnects;
+  d["uptime_ms"]=millis();
+  d["connected"]=(st==WL_CONNECTED);
+  d["ip"]=WiFi.localIP().toString();
+  wsSendJson(d);
+}
 
 void hello(){
   DynamicJsonDocument d(256);
@@ -55,7 +81,8 @@ void setPump(bool on){
 }
 
 void onWsEvent(WStype_t type, uint8_t * payload, size_t length){
-  if(type == WStype_CONNECTED){ hello(); }
+  if(type == WStype_CONNECTED){ hello(); last_wifi_report = 0; sendWifiStatus(); }
+  else if(type == WStype_DISCONNECTED){ last_wifi_report = 0; }
   else if(type == WStype_TEXT){
     DynamicJsonDocument d(512); if(deserializeJson(d, payload, length)) return;
     const char* t = d["type"] | "";
@@ -72,7 +99,8 @@ void wsConnect(){
   String path = String("/ws/board/")+BOARD_ID+"?token="+BOARD_TOKEN;
   ws.begin(WS_HOST, WS_PORT, path.c_str());
   ws.onEvent(onWsEvent);
-  ws.setReconnectInterval(2000);
+  ws.enableHeartbeat(15000, 3000, 2);
+  ws.setReconnectInterval(1500);
 }
 
 void sendStats(){
@@ -105,5 +133,6 @@ void loop(){
     }
   } else { last_runtime_tick = now; }
   if(now - last_stats_send > 1200){ sendStats(); last_stats_send = now; }
+  if(now - last_wifi_report > 10000){ sendWifiStatus(); last_wifi_report = now; }
   delay(1);
 }

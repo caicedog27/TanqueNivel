@@ -97,10 +97,18 @@ class BoardsView(BaseModel):
     name: str
     kind: str
     online: bool
+    status: str
     last_ip: Optional[str] = None
     last_seen: Optional[float] = None
     ws_url: Optional[str] = None
     token: Optional[str] = None
+    connected_since: Optional[float] = None
+    wifi_rssi: Optional[float] = None
+    wifi_quality: Optional[float] = None
+    wifi_reconnects: Optional[int] = None
+    wifi_uptime_ms: Optional[int] = None
+    wifi_last_ts: Optional[float] = None
+    wifi_connected: Optional[bool] = None
 
 class AppState(BaseModel):
     mode: str = "MANUAL_OFF"
@@ -122,6 +130,7 @@ def save_json(path, data):
 CFG = AppCfg(**load_json(CFG_PATH, {}))
 if not os.path.exists(CFG_PATH): save_json(CFG_PATH, json.loads(CFG.model_dump_json()))
 STATE = AppState()
+BOARD_CACHE = load_json(BOARDS_CACHE_PATH, {})
 
 app = FastAPI(title="TanqueNivel Industrial", version="UX13")
 app.add_middleware(CORSMiddleware, allow_origins=CFG.net.allowed_origins or ["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -162,16 +171,27 @@ class BoardsRegisterReq(BaseModel):
     name: Optional[str] = None
     kind: Optional[str] = None
 
+def update_board_cache(board_id: str, persist: bool = True, **fields):
+    meta = BOARD_CACHE.get(board_id, {})
+    meta.update({k: v for k, v in fields.items() if v is not None})
+    BOARD_CACHE[board_id] = meta
+    if persist:
+        save_json(BOARDS_CACHE_PATH, BOARD_CACHE)
+    return meta
+
 @app.post("/api/boards")
 async def boards_register(req: BoardsRegisterReq, _:bool=Depends(require_api_key)):
     CFG.net.board_tokens[req.board_id] = req.token
     save_json(CFG_PATH, json.loads(CFG.model_dump_json()))
-    cache = load_json(BOARDS_CACHE_PATH, {})
-    meta = cache.get(req.board_id, {})
-    if req.name: meta["name"] = req.name
-    if req.kind: meta["kind"] = req.kind
-    cache[req.board_id] = meta
-    save_json(BOARDS_CACHE_PATH, cache)
+    meta = BOARD_CACHE.get(req.board_id, {})
+    if req.name:
+        meta["name"] = req.name
+    elif "name" not in meta:
+        meta["name"] = req.board_id
+    if req.kind:
+        meta["kind"] = req.kind
+    BOARD_CACHE[req.board_id] = meta
+    save_json(BOARDS_CACHE_PATH, BOARD_CACHE)
     log_event(f"board registered {req.board_id}")
     return {"ok": True}
 
@@ -180,16 +200,16 @@ async def boards_delete(board_id: str, _:bool=Depends(require_api_key)):
     if board_id in CFG.net.board_tokens:
         del CFG.net.board_tokens[board_id]
         save_json(CFG_PATH, json.loads(CFG.model_dump_json()))
-    cache = load_json(BOARDS_CACHE_PATH, {})
-    cache.pop(board_id, None)
-    save_json(BOARDS_CACHE_PATH, cache)
+    if board_id in BOARD_CACHE:
+        BOARD_CACHE.pop(board_id, None)
+        save_json(BOARDS_CACHE_PATH, BOARD_CACHE)
     log_event(f"board deleted {board_id}")
     return {"ok": True}
 
 @app.get("/api/boards")
 async def api_boards(_:bool=Depends(require_api_key)):
     # Build view from expected tokens + cache + online
-    cache = load_json(BOARDS_CACHE_PATH, {})
+    cache = BOARD_CACHE
     host = CFG.net.allowed_origins[0] if CFG.net.allowed_origins else "http://192.168.1.68:8000"
     # derive host/port for ws_url
     m = re.match(r"^https?://([^/]+)", host)
@@ -199,19 +219,39 @@ async def api_boards(_:bool=Depends(require_api_key)):
     # expected
     for bid, token in CFG.net.board_tokens.items():
         meta = cache.get(bid, {})
-        online = bid in BOARDS
+        conn = BOARDS.get(bid)
+        online = conn is not None
         name = meta.get("name", bid)
-        kind = meta.get("kind", "UNKNOWN")
-        last_ip = BOARDS[bid].ip if online else meta.get("ip")
-        last_seen = BOARDS[bid].last_seen if online else meta.get("last_seen")
+        kind = meta.get("kind", conn.kind if conn else "UNKNOWN")
+        last_ip = conn.ip if online else meta.get("ip")
+        last_seen = conn.last_seen if online else meta.get("last_seen")
+        wifi = conn.wifi_status if online else meta.get("wifi", {})
+        status = "online" if online else ("stale" if last_seen and (time.time()-float(last_seen)) < 300 else "offline")
         out.append(BoardsView(board_id=bid, name=name, kind=kind, online=online,
+                              status=status,
                               last_ip=last_ip, last_seen=last_seen,
+                              connected_since=getattr(conn, "connect_ts", None) if online else meta.get("connected_since"),
+                              wifi_rssi=wifi.get("rssi"),
+                              wifi_quality=wifi.get("quality"),
+                              wifi_reconnects=wifi.get("reconnects"),
+                              wifi_uptime_ms=wifi.get("uptime_ms"),
+                              wifi_last_ts=wifi.get("ts"),
+                              wifi_connected=wifi.get("connected"),
                               ws_url=f"{scheme_host}/ws/board/{bid}?token={token}", token=token).model_dump())
     # plus online but not expected
     for bid, c in BOARDS.items():
         if bid not in CFG.net.board_tokens:
+            wifi = c.wifi_status
             out.append(BoardsView(board_id=bid, name=c.name, kind=c.kind, online=True,
+                                  status="online",
                                   last_ip=c.ip, last_seen=c.last_seen,
+                                  connected_since=getattr(c, "connect_ts", None),
+                                  wifi_rssi=wifi.get("rssi"),
+                                  wifi_quality=wifi.get("quality"),
+                                  wifi_reconnects=wifi.get("reconnects"),
+                                  wifi_uptime_ms=wifi.get("uptime_ms"),
+                                  wifi_last_ts=wifi.get("ts"),
+                                  wifi_connected=wifi.get("connected"),
                                   ws_url=f"{scheme_host}/ws/board/{bid}?token=<unknown>", token=None).model_dump())
     return {"boards": out}
 
@@ -334,7 +374,9 @@ async def patch_cfg(req:PatchCfg, _:bool=Depends(require_api_key)):
 # ---------- WebSocket Boards ----------
 class WSConn:
     def __init__(self, ws:WebSocket, board_id:str, kind:str, name:str, ip:str):
-        self.ws=ws; self.board_id=board_id; self.kind=kind; self.name=name; self.ip=ip; self.last_seen=time.time()
+        self.ws=ws; self.board_id=board_id; self.kind=kind; self.name=name; self.ip=ip
+        self.last_seen=time.time(); self.connect_ts=self.last_seen
+        self.wifi_status: Dict[str, Any] = {}
 BOARDS: Dict[str, WSConn] = {}
 
 @app.websocket("/ws/board/{board_id}")
@@ -342,7 +384,7 @@ async def ws_board(websocket:WebSocket, board_id:str):
     await websocket.accept()
     ip = getattr(websocket.client, "host", "unknown")
     try:
-        msg = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
+        msg = await asyncio.wait_for(websocket.receive_json(), timeout=8.0)
     except Exception:
         await websocket.close(code=4400); log_event(f"WS {board_id} no_hello"); return
     if msg.get("type")!="hello":
@@ -354,7 +396,8 @@ async def ws_board(websocket:WebSocket, board_id:str):
         await websocket.close(code=4401); log_event(f"WS {board_id} token_mismatch"); return
     conn = WSConn(websocket, board_id, msg.get("kind","UNKNOWN"), msg.get("name",board_id), ip)
     BOARDS[board_id] = conn
-    cache = load_json(BOARDS_CACHE_PATH, {}); cache[board_id]={"name":conn.name,"kind":conn.kind,"ip":ip,"last_seen":time.time()}; save_json(BOARDS_CACHE_PATH, cache)
+    update_board_cache(board_id, name=conn.name, kind=conn.kind, ip=ip,
+                       last_seen=conn.last_seen, connected_since=conn.connect_ts)
     log_event(f"WS accepted {board_id} {conn.kind}")
     # Push estado actual del actuador si aplica
     if board_id == STATE.actuator.board_id and conn.kind.upper()=="ACTUATOR":
@@ -362,7 +405,14 @@ async def ws_board(websocket:WebSocket, board_id:str):
         await websocket.send_json({"type":"actuator:pump","value":"ON" if STATE.actuator.pump_on else "OFF"})
     try:
         while True:
-            data = await websocket.receive_json()
+            try:
+                data = await asyncio.wait_for(websocket.receive_json(), timeout=45.0)
+            except asyncio.TimeoutError:
+                try:
+                    await websocket.send_json({"type":"ping","ts":time.time()})
+                except Exception:
+                    pass
+                continue
             t = data.get("type"); conn.last_seen=time.time()
             if t=="sensor":
                 sid=data.get("sensor_id"); mm=float(data.get("mm",0.0)); ts=time.time()
@@ -373,12 +423,44 @@ async def ws_board(websocket:WebSocket, board_id:str):
             elif t=="actuator:stats":
                 STATE.actuator.pulses_total=int(data.get("pulses_total",STATE.actuator.pulses_total))
                 STATE.actuator.runtime_ms_total=int(data.get("runtime_ms_total",STATE.actuator.runtime_ms_total))
+            elif t=="wifi:status":
+                raw_rssi = data.get("rssi", -120.0)
+                raw_quality = data.get("quality", 0.0)
+                raw_reconnects = data.get("reconnects", 0)
+                raw_uptime = data.get("uptime_ms", 0)
+                try: rssi = float(raw_rssi)
+                except (TypeError, ValueError): rssi = -120.0
+                try: quality = float(raw_quality)
+                except (TypeError, ValueError): quality = 0.0
+                try: reconnects = int(raw_reconnects)
+                except (TypeError, ValueError): reconnects = 0
+                try: uptime_ms = int(raw_uptime)
+                except (TypeError, ValueError): uptime_ms = 0
+                wifi = {
+                    "rssi": rssi,
+                    "quality": quality,
+                    "reconnects": reconnects,
+                    "uptime_ms": uptime_ms,
+                    "connected": bool(data.get("connected", True)),
+                    "ts": time.time()
+                }
+                conn.wifi_status = wifi
+                ip_reported = data.get("ip")
+                if isinstance(ip_reported, str) and ip_reported:
+                    conn.ip = ip_reported
+                update_board_cache(board_id, wifi=wifi, ip=conn.ip, last_seen=conn.last_seen)
+            update_board_cache(board_id, persist=False, last_seen=conn.last_seen, ip=conn.ip)
     except WebSocketDisconnect:
         pass
     except Exception as e:
         log_event(f"WS error {board_id}: {e}")
     finally:
-        BOARDS.pop(board_id, None); log_event(f"WS closed {board_id}")
+        BOARDS.pop(board_id, None)
+        wifi_snapshot = dict(conn.wifi_status) if conn.wifi_status else {}
+        wifi_snapshot.setdefault("connected", False)
+        wifi_snapshot["ts"] = time.time()
+        update_board_cache(board_id, last_seen=conn.last_seen, ip=conn.ip, wifi=wifi_snapshot)
+        log_event(f"WS closed {board_id}")
 
 # ---------- Background ----------
 async def history_loop():
@@ -426,5 +508,7 @@ async def on_start():
     for p, init in [(EVENTS_PATH,""),(HISTORY_PATH,""),(PROFILES_PATH,'{"profiles":[]}'),(BOARDS_CACHE_PATH,"{}")]:
         if not os.path.exists(p):
             with open(p,"w",encoding="utf-8") as f: f.write(init)
+    global BOARD_CACHE
+    BOARD_CACHE = load_json(BOARDS_CACHE_PATH, {})
     asyncio.create_task(history_loop())
     log_event("server started")
