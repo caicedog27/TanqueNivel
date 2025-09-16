@@ -16,7 +16,7 @@ button.pill{border-radius:999px}
 .power .dot{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#b33;box-shadow:0 0 12px #b33}
 .power.on .dot{background:var(--accent-2);box-shadow:0 0 16px var(--accent-2);animation:pulse 1.6s ease infinite}
 #scope{display:block;margin:12px auto;background:linear-gradient(180deg,#0a0f14,#0c121a);border:1px solid var(--border);border-radius:10px}
-.badge{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--border)}.badge.ok{color:var(--accent-2);border-color:color-mix(in oklab, var(--accent-2), var(--border) 50%)}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--border)}.badge.ok{color:var(--accent-2);border-color:color-mix(in oklab, var(--accent-2), var(--border) 50%)}.badge.warn{color:#f0c674;border-color:color-mix(in oklab, #f0c674, var(--border) 60%)}.badge.err{color:var(--danger);border-color:color-mix(in oklab, var(--danger), var(--border) 60%)}
 .wsurl{font-family:ui-monospace,Consolas,monospace;font-size:12px;word-break:break-all;color:#a8c7ff;background:rgba(0,0,0,.25);padding:6px;border-radius:8px;border:1px dashed var(--border)}
 .hint{color:var(--muted);font-size:12px}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);min-width:240px;max-width:92vw;background:rgba(0,0,0,.5);border:1px solid var(--border);padding:12px;border-radius:12px;opacity:0;transition:.25s}#toast.show{opacity:1;transform:translateX(-50%) translateY(-6px)}
