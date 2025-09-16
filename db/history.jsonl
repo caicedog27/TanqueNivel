@@ -1537,3 +1537,8 @@
 {"ts": 1758054503.2690692, "pulses": 0.0, "runtime_s": 0.0, "pump_on": 1.0, "tank_pct": 0.0, "hopper_pct": 0.0, "on_ms": 100, "off_ms": 233, "hz": 3.003003003003003, "duty": 30.03003003003003}
 {"ts": 1758054505.270843, "pulses": 0.0, "runtime_s": 0.0, "pump_on": 1.0, "tank_pct": 0.0, "hopper_pct": 0.0, "on_ms": 100, "off_ms": 233, "hz": 3.003003003003003, "duty": 30.03003003003003}
 {"ts": 1758054507.2810504, "pulses": 0.0, "runtime_s": 0.0, "pump_on": 1.0, "tank_pct": 0.0, "hopper_pct": 0.0, "on_ms": 100, "off_ms": 233, "hz": 3.003003003003003, "duty": 30.03003003003003}
+{"ts": 1758054509.2834213, "pulses": 0.0, "runtime_s": 0.0, "pump_on": 1.0, "tank_pct": 0.0, "hopper_pct": 0.0, "on_ms": 100, "off_ms": 233, "hz": 3.003003003003003, "duty": 30.03003003003003}
+{"ts": 1758054511.2880712, "pulses": 0.0, "runtime_s": 0.0, "pump_on": 0.0, "tank_pct": 0.0, "hopper_pct": 0.0, "on_ms": 100, "off_ms": 233, "hz": 0.0, "duty": 30.03003003003003}
+{"ts": 1758054513.2900138, "pulses": 0.0, "runtime_s": 0.0, "pump_on": 0.0, "tank_pct": 0.0, "hopper_pct": 0.0, "on_ms": 100, "off_ms": 233, "hz": 0.0, "duty": 30.03003003003003}
+{"ts": 1758054515.2929757, "pulses": 0.0, "runtime_s": 0.0, "pump_on": 0.0, "tank_pct": 0.0, "hopper_pct": 0.0, "on_ms": 100, "off_ms": 233, "hz": 0.0, "duty": 30.03003003003003}
+{"ts": 1758054517.3034208, "pulses": 0.0, "runtime_s": 0.0, "pump_on": 0.0, "tank_pct": 0.0, "hopper_pct": 0.0, "on_ms": 100, "off_ms": 233, "hz": 0.0, "duty": 30.03003003003003}
