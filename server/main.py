@@ -99,6 +99,10 @@ class BoardsView(BaseModel):
     online: bool
     last_ip: Optional[str] = None
     last_seen: Optional[float] = None
+    rssi: Optional[int] = None
+    fw: Optional[str] = None
+    mac: Optional[str] = None
+    uptime_s: Optional[int] = None
     ws_url: Optional[str] = None
     token: Optional[str] = None
 
@@ -197,21 +201,28 @@ async def api_boards(_:bool=Depends(require_api_key)):
     scheme_host = f"ws://{ws_host}"
     out = []
     # expected
-    for bid, token in CFG.net.board_tokens.items():
+    for bid, token in sorted(CFG.net.board_tokens.items()):
         meta = cache.get(bid, {})
         online = bid in BOARDS
         name = meta.get("name", bid)
         kind = meta.get("kind", "UNKNOWN")
-        last_ip = BOARDS[bid].ip if online else meta.get("ip")
-        last_seen = BOARDS[bid].last_seen if online else meta.get("last_seen")
+        conn = BOARDS.get(bid)
+        last_ip = conn.ip if conn else meta.get("ip")
+        last_seen = conn.last_seen if conn else meta.get("last_seen")
+        rssi = conn.rssi if conn else meta.get("rssi")
+        fw = conn.fw if conn else meta.get("fw")
+        mac = conn.mac if conn else meta.get("mac")
+        uptime_s = conn.uptime_s if conn else meta.get("uptime_s")
         out.append(BoardsView(board_id=bid, name=name, kind=kind, online=online,
-                              last_ip=last_ip, last_seen=last_seen,
+                              last_ip=last_ip, last_seen=last_seen, rssi=rssi,
+                              fw=fw, mac=mac, uptime_s=uptime_s,
                               ws_url=f"{scheme_host}/ws/board/{bid}?token={token}", token=token).model_dump())
     # plus online but not expected
     for bid, c in BOARDS.items():
         if bid not in CFG.net.board_tokens:
             out.append(BoardsView(board_id=bid, name=c.name, kind=c.kind, online=True,
-                                  last_ip=c.ip, last_seen=c.last_seen,
+                                  last_ip=c.ip, last_seen=c.last_seen, rssi=c.rssi,
+                                  fw=c.fw, mac=c.mac, uptime_s=c.uptime_s,
                                   ws_url=f"{scheme_host}/ws/board/{bid}?token=<unknown>", token=None).model_dump())
     return {"boards": out}
 
