@@ -25,6 +25,10 @@ WebSocketsClient ws;
 uint32_t last_send_ms = 0;
 const int WN = 7; float windowVals[WN]; int wCount=0; float last_mm = 0;
 
+const char* wsBoardId = nullptr;
+const char* wsBoardName = nullptr;
+bool wsReadyForSamples = false;
+
 void ensureWiFi(){
   static uint8_t attempt = 0;
   static uint32_t lastAttempt = 0;
@@ -57,17 +61,26 @@ void ensureWiFi(){
 }
 void wsSendJson(DynamicJsonDocument &doc){ String out; serializeJson(doc, out); ws.sendTXT(out); }
 void hello(const char* id, const char* name){ DynamicJsonDocument d(256); d["type"]="hello"; d["id"]=id; d["kind"]="SENSOR"; d["name"]=name; d["token"]=BOARD_TOKEN; d["fw"]=FW_VERSION; d["mac"]=WiFi.macAddress(); d["rssi"]=WiFi.RSSI(); d["uptime_s"]=(millis()-boot_ms)/1000; wsSendJson(d); }
-void sendSample(const char* sensor, float mm){ DynamicJsonDocument d(256); d["type"]="sensor"; d["sensor_id"]=sensor; d["mm"]=mm; d["rssi"]=WiFi.RSSI(); d["uptime_s"]=(millis()-boot_ms)/1000; wsSendJson(d); }
+void sendSample(const char* sensor, float mm){ if(!wsReadyForSamples){ return; } DynamicJsonDocument d(256); d["type"]="sensor"; d["sensor_id"]=sensor; d["mm"]=mm; d["rssi"]=WiFi.RSSI(); d["uptime_s"]=(millis()-boot_ms)/1000; wsSendJson(d); }
 void onWsEvent(WStype_t type, uint8_t * payload, size_t length){
   switch(type){
     case WStype_CONNECTED:
       Serial.println("[WS] Connected to server");
+      wsReadyForSamples = false;
+      if(wsBoardId != nullptr && wsBoardName != nullptr){
+        hello(wsBoardId, wsBoardName);
+        wsReadyForSamples = true;
+      } else {
+        Serial.println("[WS] Board identity not set, cannot send hello");
+      }
       break;
     case WStype_DISCONNECTED:
       Serial.println("[WS] Disconnected from server");
+      wsReadyForSamples = false;
       break;
     case WStype_ERROR:
       Serial.println("[WS] Error event received");
+      wsReadyForSamples = false;
       break;
     case WStype_TEXT:
       Serial.printf("[WS] Message: %.*s\n", (int)length, (const char*)payload);
@@ -76,7 +89,7 @@ void onWsEvent(WStype_t type, uint8_t * payload, size_t length){
       break;
   }
 }
-void wsConnect(const char* id){ String path=String("/ws/board/")+id+"?token="+BOARD_TOKEN; ws.begin(WS_HOST, WS_PORT, path.c_str()); ws.onEvent(onWsEvent); ws.setReconnectInterval(2000);
+void wsConnect(const char* id, const char* name){ wsBoardId = id; wsBoardName = name; wsReadyForSamples = false; String path=String("/ws/board/")+id+"?token="+BOARD_TOKEN; ws.begin(WS_HOST, WS_PORT, path.c_str()); ws.onEvent(onWsEvent); ws.setReconnectInterval(2000);
   ws.enableHeartbeat(15000, 3000, 2); }
 
 uint32_t lastSensorRead_ms = 0;
