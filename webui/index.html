@@ -4,7 +4,11 @@
 <div id="app" class="theme-dark">
   <header>
     <div class="brand"><h1>TanqueNivel Industrial <small>UX13</small></h1></div>
-    <div class="controls">
+    <button id="controlsToggle" type="button" class="pill ghost controls-toggle" aria-expanded="true" aria-controls="topControls">
+      <span class="label">Ocultar panel</span>
+      <span class="chevron">▴</span>
+    </button>
+    <div class="controls" id="topControls">
       <div class="accent">
         <button class="swatch" data-accent="#00b3ff" style="--c:#00b3ff"></button>
         <button class="swatch" data-accent="#2bd97c" style="--c:#2bd97c"></button>
