@@ -7,7 +7,7 @@ const char* FW_VERSION = "UX15";
 uint32_t boot_ms = 0;
 
 
-const char* WIFI_SSID = "PLANTA_VIVI_NAVE";
+const char* WIFI_SSID = "PLANTA_VIVO_NAVE";
 const char* WIFI_PASS = "901878434-1";
 const char* WS_HOST  = "192.168.1.68";
 const uint16_t WS_PORT = 8000;
