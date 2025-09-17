@@ -1,1 +1,12 @@
-{}
+{
+  "ACT-01": {
+    "name": "Actuador Bomba",
+    "kind": "ACTUATOR",
+    "ip": "192.168.1.30",
+    "last_seen": 1758074273.7698894,
+    "rssi": -66,
+    "fw": "UX14",
+    "mac": "24:6F:28:C5:F3:90",
+    "uptime_s": 2
+  }
+}
