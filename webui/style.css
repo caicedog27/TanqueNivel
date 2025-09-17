@@ -1,13 +1,19 @@
 :root{--bg:#0e1117;--bg2:#10151d;--ink:#e6edf3;--muted:#93a1b3;--card:#121826;--border:#1c2634;--accent:#00b3ff;--accent-2:#2bd97c;--danger:#ff4d4f}
 *{box-sizing:border-box}html,body{margin:0;background:linear-gradient(180deg,#0b0e13,#0c1017 40%,#0d111a);color:var(--ink);font-family:system-ui,Segoe UI,Roboto,Arial}
-header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;background:rgba(0,0,0,.2);backdrop-filter:blur(8px)}
-.tabs{display:flex;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border)}
-.tabs button{background:radial-gradient(120% 120% at 50% 15%,rgba(255,255,255,.08),rgba(0,0,0,0));color:var(--ink);border:1px solid color-mix(in oklab,var(--accent),var(--border) 70%);padding:10px 16px;border-radius:999px;cursor:pointer;box-shadow:0 12px 30px -20px var(--accent);transition:transform .3s ease,box-shadow .3s ease,background .3s ease,border-color .3s ease}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;background:rgba(0,0,0,.2);backdrop-filter:blur(8px)}
+.brand{flex:1 1 220px}
+.controls{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex:2 1 320px;flex-wrap:wrap}
+.apikey{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.apikey label{display:flex;align-items:center;gap:8px;flex:1 1 200px;min-width:0}
+.apikey input{flex:1 1 auto;min-width:120px}
+.apikey button{flex:0 0 auto}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:thin}
+.tabs button{flex:1 1 140px;min-width:120px;background:radial-gradient(120% 120% at 50% 15%,rgba(255,255,255,.08),rgba(0,0,0,0));color:var(--ink);border:1px solid color-mix(in oklab,var(--accent),var(--border) 70%);padding:10px 16px;border-radius:999px;cursor:pointer;box-shadow:0 12px 30px -20px var(--accent);transition:transform .3s ease,box-shadow .3s ease,background .3s ease,border-color .3s ease}
 .tabs button:hover{transform:translateY(-2px);box-shadow:0 18px 40px -20px var(--accent);background:radial-gradient(120% 120% at 50% 15%,rgba(255,255,255,.16),rgba(0,0,0,0))}
 .tabs .active{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0));border-color:color-mix(in oklab, var(--accent), var(--border) 70%)}
 .tab{display:none;padding:16px}.tab.active{display:block}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
-.card{background:rgba(20,26,38,.6);border:1px solid var(--border);border-radius:16px;box-shadow:0 10px 26px rgba(0,0,0,.35);padding:16px}
+.card{background:rgba(20,26,38,.6);border:1px solid var(--border);border-radius:16px;box-shadow:0 10px 26px rgba(0,0,0,.35);padding:16px;min-width:0}
 .kv{list-style:none;margin:0;padding:0}.kv li{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border)}.kv li span{color:var(--muted)}
 .gauge{height:18px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(180deg,#0a0f14,#0c121a);overflow:hidden}.gauge-bar{height:100%;width:0;background:linear-gradient(90deg,var(--accent),#4cd3ff);transition:width .3s}
 button,input,select{border:1px solid color-mix(in oklab,var(--border),transparent 25%);border-radius:14px;background:color-mix(in oklab,var(--bg2),rgba(255,255,255,.02));color:var(--ink);padding:10px 14px;transition:transform .3s ease,box-shadow .3s ease,border-color .3s ease,background .3s ease}
@@ -23,7 +29,7 @@ button.ghost{background:linear-gradient(135deg,rgba(0,0,0,.35),rgba(0,0,0,.1));b
 button.ghost:hover{box-shadow:0 20px 40px -26px rgba(171,92,255,.65)}
 button.wide{width:100%}
 .row{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end}
-.row>*,.row>label{flex:1 1 180px}
+.row>*,.row>label{flex:1 1 180px;min-width:0}
 .row input,.row select{width:100%}
 .row button{flex:1 1 220px}
 .manual-controls{display:flex;flex-direction:column;align-items:center;gap:28px;padding:12px 0}
@@ -40,7 +46,8 @@ button.wide{width:100%}
 .power.on{box-shadow:inset 0 0 55px rgba(0,0,0,.55),0 20px 70px -18px rgba(0,179,255,.75)}
 .power.on .ring{animation-duration:4s;filter:drop-shadow(0 0 35px rgba(43,217,124,.7))}
 .power.on .dot{background:radial-gradient(circle at 30% 30%,rgba(255,255,255,.85),var(--accent-2) 55%,rgba(43,217,124,.55) 75%,rgba(0,0,0,.25));box-shadow:0 0 28px rgba(43,217,124,.85);animation:powerGlow 2.8s ease-in-out infinite}
-#scope{display:block;margin:12px auto;background:linear-gradient(180deg,#0a0f14,#0c121a);border:1px solid var(--border);border-radius:10px}
+#scope{display:block;margin:12px auto;background:linear-gradient(180deg,#0a0f14,#0c121a);border:1px solid var(--border);border-radius:10px;max-width:100%}
+.card canvas{max-width:100%;height:auto}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--border)}.badge.ok{color:var(--accent-2);border-color:color-mix(in oklab, var(--accent-2), var(--border) 50%)}
 .wsurl{font-family:ui-monospace,Consolas,monospace;font-size:12px;word-break:break-all;color:#a8c7ff;background:rgba(0,0,0,.25);padding:6px;border-radius:8px;border:1px dashed var(--border)}
 .hint{color:var(--muted);font-size:12px}
@@ -71,3 +78,27 @@ button.wide{width:100%}
 @keyframes breath{0%,100%{transform:translate(-50%,-50%) scale(.92);opacity:.9}50%{transform:translate(-50%,-50%) scale(1.04);opacity:1}}
 @keyframes powerGlow{0%,100%{transform:translate(-50%,-50%) scale(.96);box-shadow:0 0 24px rgba(43,217,124,.85)}40%{transform:translate(-50%,-50%) scale(1.1);box-shadow:0 0 36px rgba(43,217,124,1)}}
 @keyframes float{0%,100%{transform:translateY(-4px)}50%{transform:translateY(6px)}}
+
+.accent{display:flex;gap:8px;flex-wrap:wrap}
+
+@media (max-width:960px){
+  .tabs button{flex:1 1 calc(33.33% - 12px)}
+}
+
+@media (max-width:720px){
+  header{flex-direction:column;align-items:flex-start}
+  .controls{width:100%;justify-content:flex-start}
+  .tabs button{flex:1 1 calc(50% - 12px);min-width:0}
+  .apikey{width:100%}
+  .apikey button{flex:1 1 140px}
+}
+
+@media (max-width:520px){
+  .controls{flex-direction:column;align-items:stretch}
+  .controls .accent{order:1}
+  .apikey{order:2}
+  .tabs{gap:6px}
+  .tabs button{flex:1 1 100%}
+  .row>*,.row>label{flex:1 1 100%}
+  .manual-controls .knob{min-width:160px}
+}
