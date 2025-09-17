@@ -62,7 +62,7 @@
         <div class="row knobs">
           <div class="knob"><label>ON (ms)</label><input type="range" id="onInput" min="20" max="5000" value="100"><div class="knob-value"><b id="onVal">100</b> ms</div></div>
           <div class="knob"><label>OFF (ms)</label><input type="range" id="offInput" min="10" max="10000" value="233"><div class="knob-value"><b id="offVal">233</b> ms</div></div>
-          <button id="applyDuty" class="pill">Aplicar</button>
+          <button id="applyDuty" class="pill wide">Aplicar</button>
         </div>
         <canvas id="scope" width="960" height="160"></canvas>
       </div>
@@ -78,7 +78,7 @@
         <label>Histéresis (%)<input type="number" id="hystPct" min="1" max="15" value="5"></label>
         <label>Anti-derrame (%)<input type="number" id="spillGuard" min="0" max="5" value="1.2" step="0.1"></label>
         <label>Bloqueo tanque bajo (%)<input type="number" id="tankLowLock" min="0" max="50" value="15"></label>
-        <button id="applyAuto" class="pill ghost">Aplicar</button>
+        <button id="applyAuto" class="pill ghost wide">Aplicar</button>
       </div>
     </div>
   </section>
@@ -102,7 +102,7 @@
           </div>
         </div>
       </div>
-      <div class="row"><button id="btnSaveCal" class="pill">Guardar calibración</button></div>
+      <div class="row"><button id="btnSaveCal" class="pill wide">Guardar calibración</button></div>
       <p class="hint">Vacío = distancia más grande (sensor lejos). Lleno = distancia más pequeña.</p>
     </div>
   </section>
@@ -115,30 +115,30 @@
         <label>Nombre<input id="profName"></label>
         <label>ON (ms)<input id="profOn" type="number" min="20" max="5000" value="100"></label>
         <label>OFF (ms)<input id="profOff" type="number" min="10" max="10000" value="233"></label>
-        <button id="btnSaveProf" class="pill">Guardar perfil</button>
+        <button id="btnSaveProf" class="pill wide">Guardar perfil</button>
       </div>
     </div>
   </section>
 
-  <section id="history" class="tab"><div class="card glass big"><h3>Gráficas</h3><button id="refreshHistory" class="pill ghost">Actualizar</button><canvas id="plotLevels" width="980" height="200"></canvas><canvas id="plotRuntime" width="980" height="200"></canvas><canvas id="plotPulses" width="980" height="200"></canvas><canvas id="plotHz" width="980" height="200"></canvas><canvas id="plotDuty" width="980" height="200"></canvas><canvas id="plotOnMs" width="980" height="200"></canvas></div></section>
+  <section id="history" class="tab"><div class="card glass big"><h3>Gráficas</h3><button id="refreshHistory" class="pill ghost wide">Actualizar</button><canvas id="plotLevels" width="980" height="200"></canvas><canvas id="plotRuntime" width="980" height="200"></canvas><canvas id="plotPulses" width="980" height="200"></canvas><canvas id="plotHz" width="980" height="200"></canvas><canvas id="plotDuty" width="980" height="200"></canvas><canvas id="plotOnMs" width="980" height="200"></canvas></div></section>
 
   <section id="boards" class="tab">
     <div class="card glass big">
       <h3>Equipos</h3>
       <div class="row">
-        <button id="btnRefreshBoards" class="pill">Actualizar</button>
+        <button id="btnRefreshBoards" class="pill wide">Actualizar</button>
         <input id="newBoardId" placeholder="Board ID (p.ej. ACT-01)">
         <input id="newBoardTok" placeholder="Token">
         <input id="newBoardName" placeholder="Nombre opc.">
         <select id="newBoardKind"><option value="">Tipo...</option><option>ACTUATOR</option><option>SENSOR</option></select>
-        <button id="btnAddBoard" class="pill ghost">Agregar</button>
+        <button id="btnAddBoard" class="pill ghost wide">Agregar</button>
       </div>
       <div id="boardsList" class="cards"></div>
       <p class="hint">La lista muestra los equipos esperados (configurados) con estado Online/Offline y su URL/Token de WebSocket listos para copiar.</p>
     </div>
   </section>
 
-  <section id="config" class="tab"><div class="card glass big"><h3>Config</h3><div class="row"><label>Allowed Origins<input id="origins"></label><label>API Key<input id="apiKeyCfg"></label></div><button id="btnPatchCfg" class="pill">Guardar Config</button></div></section>
+  <section id="config" class="tab"><div class="card glass big"><h3>Config</h3><div class="row"><label>Allowed Origins<input id="origins"></label><label>API Key<input id="apiKeyCfg"></label></div><button id="btnPatchCfg" class="pill wide">Guardar Config</button></div></section>
   <section id="events" class="tab"><div class="card glass big"><h3>Eventos</h3><pre id="eventsTail"></pre></div></section>
 </div>
 <div id="toast"></div>

@@ -2,19 +2,44 @@
 *{box-sizing:border-box}html,body{margin:0;background:linear-gradient(180deg,#0b0e13,#0c1017 40%,#0d111a);color:var(--ink);font-family:system-ui,Segoe UI,Roboto,Arial}
 header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;background:rgba(0,0,0,.2);backdrop-filter:blur(8px)}
 .tabs{display:flex;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border)}
-.tabs button{background:var(--bg2);color:var(--ink);border:1px solid var(--border);padding:8px 12px;border-radius:10px;cursor:pointer}
+.tabs button{background:radial-gradient(120% 120% at 50% 15%,rgba(255,255,255,.08),rgba(0,0,0,0));color:var(--ink);border:1px solid color-mix(in oklab,var(--accent),var(--border) 70%);padding:10px 16px;border-radius:999px;cursor:pointer;box-shadow:0 12px 30px -20px var(--accent);transition:transform .3s ease,box-shadow .3s ease,background .3s ease,border-color .3s ease}
+.tabs button:hover{transform:translateY(-2px);box-shadow:0 18px 40px -20px var(--accent);background:radial-gradient(120% 120% at 50% 15%,rgba(255,255,255,.16),rgba(0,0,0,0))}
 .tabs .active{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0));border-color:color-mix(in oklab, var(--accent), var(--border) 70%)}
 .tab{display:none;padding:16px}.tab.active{display:block}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
 .card{background:rgba(20,26,38,.6);border:1px solid var(--border);border-radius:16px;box-shadow:0 10px 26px rgba(0,0,0,.35);padding:16px}
 .kv{list-style:none;margin:0;padding:0}.kv li{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border)}.kv li span{color:var(--muted)}
 .gauge{height:18px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(180deg,#0a0f14,#0c121a);overflow:hidden}.gauge-bar{height:100%;width:0;background:linear-gradient(90deg,var(--accent),#4cd3ff);transition:width .3s}
-button,input,select{border:1px solid var(--border);border-radius:10px;background:var(--bg2);color:var(--ink);padding:8px 10px}
+button,input,select{border:1px solid color-mix(in oklab,var(--border),transparent 25%);border-radius:14px;background:color-mix(in oklab,var(--bg2),rgba(255,255,255,.02));color:var(--ink);padding:10px 14px;transition:transform .3s ease,box-shadow .3s ease,border-color .3s ease,background .3s ease}
+button{display:inline-flex;align-items:center;justify-content:center;gap:.4rem;font-weight:600;letter-spacing:.02em;cursor:pointer;position:relative;isolation:isolate;overflow:hidden;box-shadow:0 20px 40px -32px rgba(0,179,255,.9)}
+button:not(.power)::before{content:"";position:absolute;inset:-40%;background:radial-gradient(circle at 30% 30%,rgba(0,179,255,.35),transparent 55%);opacity:0;transition:opacity .4s ease;z-index:-1}
+button:not(.power):hover{transform:translateY(-2px);box-shadow:0 22px 42px -24px rgba(0,179,255,.7);border-color:color-mix(in oklab,var(--accent),var(--border) 60%);background:linear-gradient(135deg,color-mix(in oklab,var(--bg2),rgba(0,179,255,.18) 25%),color-mix(in oklab,var(--bg2),rgba(171,92,255,.18) 25%))}
+button:not(.power):hover::before{opacity:1}
+button:not(.power):active{transform:scale(.98)}
 button.pill{border-radius:999px}
-.power{width:150px;height:150px;border:none;border-radius:50%;position:relative;background:radial-gradient(120px 110px at 50% 35%, color-mix(in oklab, var(--accent), #000 75%), #0a0f14);color:#dbe6f2;box-shadow:inset 0 0 40px rgba(0,0,0,.6), 0 10px 30px rgba(0,0,0,.4)}
-.power .ring{position:absolute;inset:6px;border-radius:50%;background:conic-gradient(from 0deg, var(--accent) 0 25%, transparent 25% 100%);opacity:.85}
-.power .dot{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#b33;box-shadow:0 0 12px #b33}
-.power.on .dot{background:var(--accent-2);box-shadow:0 0 16px var(--accent-2);animation:pulse 1.6s ease infinite}
+button.icon{width:42px;height:42px;padding:0;border-radius:12px;font-size:1.2rem;box-shadow:none;background:color-mix(in oklab,var(--bg2),rgba(255,255,255,.04));border-color:rgba(255,255,255,.05)}
+button.icon:hover{box-shadow:0 16px 28px -24px rgba(0,179,255,.7)}
+button.ghost{background:linear-gradient(135deg,rgba(0,0,0,.35),rgba(0,0,0,.1));border-color:rgba(255,255,255,.1);box-shadow:none}
+button.ghost:hover{box-shadow:0 20px 40px -26px rgba(171,92,255,.65)}
+button.wide{width:100%}
+.row{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end}
+.row>*,.row>label{flex:1 1 180px}
+.row input,.row select{width:100%}
+.row button{flex:1 1 220px}
+.manual-controls{display:flex;flex-direction:column;align-items:center;gap:28px;padding:12px 0}
+.manual-controls .row{width:min(100%,680px);display:flex;flex-wrap:wrap;gap:18px;justify-content:center}
+.manual-controls .knob{flex:1 1 220px;min-width:200px}
+.manual-controls .knob input{width:100%}
+.power{width:min(100%,340px);aspect-ratio:1/1;border:none;border-radius:28px;position:relative;background:radial-gradient(140% 140% at 50% 10%,color-mix(in oklab,var(--accent),#061020 55%),#05070d 68%,#020408 100%);color:#dbe6f2;box-shadow:inset 0 0 45px rgba(0,0,0,.65),0 18px 60px -24px rgba(15,25,45,.8);overflow:hidden;animation:float 6s ease-in-out infinite;transition:box-shadow .5s ease,transform .5s ease}
+.power:hover{animation-play-state:paused;box-shadow:inset 0 0 55px rgba(0,0,0,.55),0 28px 80px -18px rgba(0,179,255,.75);transform:translateY(-4px)}
+.power.small{width:min(100%,240px)}
+.power::after{content:"";position:absolute;inset:18%;border-radius:50%;background:radial-gradient(circle at 50% 20%,rgba(255,255,255,.16),transparent 65%);opacity:.35;filter:blur(1px)}
+.power .ring{position:absolute;inset:11%;border-radius:50%;background:conic-gradient(from 0deg,var(--accent),color-mix(in oklab,var(--accent),#a970ff 45%) 35%,color-mix(in oklab,var(--accent),#2bd97c 45%) 70%,var(--accent));animation:spin 7s linear infinite;mix-blend-mode:screen;filter:drop-shadow(0 0 25px rgba(0,179,255,.55));mask:radial-gradient(farthest-side,#000 calc(100% - 20px),transparent calc(100% - 8px));-webkit-mask:radial-gradient(farthest-side,#000 calc(100% - 20px),transparent calc(100% - 8px))}
+.power .dot{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);width:54px;height:54px;border-radius:50%;background:radial-gradient(circle at 30% 30%,rgba(255,255,255,.8),rgba(0,179,255,.85) 45%,rgba(0,179,255,.45) 72%,rgba(0,0,0,.3));box-shadow:0 0 25px rgba(0,179,255,.75);animation:breath 4.2s ease-in-out infinite}
+.power .label{position:absolute;bottom:14%;left:50%;transform:translateX(-50%);font-size:1.05rem;letter-spacing:.18em;text-transform:uppercase;font-weight:600;color:rgba(226,239,255,.85);text-shadow:0 0 16px rgba(0,179,255,.45)}
+.power.on{box-shadow:inset 0 0 55px rgba(0,0,0,.55),0 20px 70px -18px rgba(0,179,255,.75)}
+.power.on .ring{animation-duration:4s;filter:drop-shadow(0 0 35px rgba(43,217,124,.7))}
+.power.on .dot{background:radial-gradient(circle at 30% 30%,rgba(255,255,255,.85),var(--accent-2) 55%,rgba(43,217,124,.55) 75%,rgba(0,0,0,.25));box-shadow:0 0 28px rgba(43,217,124,.85);animation:powerGlow 2.8s ease-in-out infinite}
 #scope{display:block;margin:12px auto;background:linear-gradient(180deg,#0a0f14,#0c121a);border:1px solid var(--border);border-radius:10px}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--border)}.badge.ok{color:var(--accent-2);border-color:color-mix(in oklab, var(--accent-2), var(--border) 50%)}
 .wsurl{font-family:ui-monospace,Consolas,monospace;font-size:12px;word-break:break-all;color:#a8c7ff;background:rgba(0,0,0,.25);padding:6px;border-radius:8px;border:1px dashed var(--border)}
@@ -42,3 +67,7 @@ button.pill{border-radius:999px}
 /* Card entrance animation */
 .card{animation:pop .18s ease-out both}
 @keyframes pop{from{transform:scale(.985);opacity:0}to{transform:none;opacity:1}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes breath{0%,100%{transform:translate(-50%,-50%) scale(.92);opacity:.9}50%{transform:translate(-50%,-50%) scale(1.04);opacity:1}}
+@keyframes powerGlow{0%,100%{transform:translate(-50%,-50%) scale(.96);box-shadow:0 0 24px rgba(43,217,124,.85)}40%{transform:translate(-50%,-50%) scale(1.1);box-shadow:0 0 36px rgba(43,217,124,1)}}
+@keyframes float{0%,100%{transform:translateY(-4px)}50%{transform:translateY(6px)}}
