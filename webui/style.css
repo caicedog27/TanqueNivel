@@ -108,6 +108,8 @@ button.wide{width:100%}
   .brand h1{align-items:flex-start}
   .controls-toggle{display:inline-flex;align-self:flex-start}
   header.collapsed .controls-toggle{margin-bottom:0}
+  header.expanded{position:static}
+  header.expanded .controls{max-height:60vh;overflow:auto;-webkit-overflow-scrolling:touch}
   .controls{width:100%;justify-content:flex-start;padding:12px 14px}
   .apikey{width:100%}
   .apikey button{flex:1 1 140px}
