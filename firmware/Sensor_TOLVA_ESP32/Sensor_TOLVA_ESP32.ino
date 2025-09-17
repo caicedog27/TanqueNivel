@@ -6,7 +6,7 @@ void setup(){
   Serial.begin(115200);
   while(!Serial && millis() - boot_ms < 2000){}
   Serial.println("[BOOT] Sensor TOLVA starting");
-  US.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
+  beginSensorInterface();
   Serial.println("[US] Serial interface initialized");
   ensureWiFi();
   wsConnect(BOARD_ID, "DYP-A01 TOLVA");
