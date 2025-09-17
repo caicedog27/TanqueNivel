@@ -16,7 +16,51 @@ function wifiBarsHTML(rssi){
 }
 function toast(msg,k='ok',trace=null){ const t=$('#toast'); t.innerHTML=(k==='ok'?'✅ ':'⚠️ ')+msg+(trace?`<br><small>trace:${trace}</small>`:''); t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2600); }
 function hz(on,off){const p=on+off;return p?1000.0/p:0} function duty(on,off){const p=on+off;return p?100.0*on/p:0}
-const Dash={async refresh(){try{const r=await API.get('/api/state'); const st=r.state,cfg=r.cfg; $('#modeLbl').textContent=st.mode; const pumpLbl=$('#pumpLbl'); pumpLbl.textContent=st.actuator.pump_on?'ON':'OFF'; pumpLbl.className='badge '+(st.actuator.pump_on?'ok':''); Manual.setButton(!!st.actuator.pump_on); $('#onms').textContent=st.actuator.on_ms; $('#offms').textContent=st.actuator.off_ms; $('#pulses').textContent=st.actuator.pulses_total; $('#runtime').textContent=(st.actuator.runtime_ms_total/1000).toFixed(1)+' s'; $('#tankPct').textContent=st.tank.filtered_pct.toFixed(1); $('#hopperPct').textContent=st.hopper.filtered_pct.toFixed(1); $('#tankGauge').style.width=st.tank.filtered_pct+'%'; $('#hopperGauge').style.width=st.hopper.filtered_pct+'%'; $('#hzLbl').textContent=hz(st.actuator.on_ms,st.actuator.off_ms).toFixed(2); $('#dutyLbl').textContent=duty(st.actuator.on_ms,st.actuator.off_ms).toFixed(1); $('#onInput').value=st.actuator.on_ms; $('#offInput').value=st.actuator.off_ms; $('#onVal').textContent=st.actuator.on_ms; $('#offVal').textContent=st.actuator.off_ms; Auto.setButton(st.mode==='AUTO'); $('#targetPct').value=cfg.hopper.cal.target_pct; $('#hystPct').value=cfg.hopper.cal.hysteresis_pct; $('#spillGuard').value=cfg.auto.anti_spill_margin_pct; $('#tankLowLock').value=cfg.auto.tank_low_lock_pct; }catch(e){toast('Error leyendo estado. Verifica API Key (DEVKEY123).','err',e.detail||e.trace);}}};
+const Dash={
+  async refresh(){
+    try{
+      const r=await API.get('/api/state');
+      const st=r.state,cfg=r.cfg;
+      $('#modeLbl').textContent=st.mode;
+      const pumpLbl=$('#pumpLbl');
+      pumpLbl.textContent=st.actuator.pump_on?'ON':'OFF';
+      pumpLbl.className='badge '+(st.actuator.pump_on?'ok':'');
+      Manual.setButton(!!st.actuator.pump_on);
+      $('#onms').textContent=st.actuator.on_ms;
+      $('#offms').textContent=st.actuator.off_ms;
+      $('#pulses').textContent=st.actuator.pulses_total;
+      $('#runtime').textContent=(st.actuator.runtime_ms_total/1000).toFixed(1)+' s';
+      $('#tankPct').textContent=st.tank.filtered_pct.toFixed(1);
+      $('#hopperPct').textContent=st.hopper.filtered_pct.toFixed(1);
+      $('#tankGauge').style.width=st.tank.filtered_pct+'%';
+      $('#hopperGauge').style.width=st.hopper.filtered_pct+'%';
+      $('#hzLbl').textContent=hz(st.actuator.on_ms,st.actuator.off_ms).toFixed(2);
+      $('#dutyLbl').textContent=duty(st.actuator.on_ms,st.actuator.off_ms).toFixed(1);
+      $('#onInput').value=st.actuator.on_ms;
+      $('#offInput').value=st.actuator.off_ms;
+      $('#onVal').textContent=st.actuator.on_ms;
+      $('#offVal').textContent=st.actuator.off_ms;
+      Auto.setButton(st.mode==='AUTO');
+      $('#targetPct').value=cfg.hopper.cal.target_pct;
+      $('#hystPct').value=cfg.hopper.cal.hysteresis_pct;
+      $('#spillGuard').value=cfg.auto.anti_spill_margin_pct;
+      $('#tankLowLock').value=cfg.auto.tank_low_lock_pct;
+      const dashAuto=$('#dashAutoToggle');
+      const dashManual=$('#dashManualToggle');
+      if(dashAuto && dashManual){
+        const isAuto=st.mode==='AUTO';
+        dashAuto.textContent=isAuto?'Detener automático':'Iniciar automático';
+        dashAuto.classList.toggle('on',isAuto);
+        dashManual.textContent=Manual.on?'Apagar bomba':'Encender bomba';
+        dashManual.disabled=isAuto;
+        dashManual.title=isAuto?'Disponible sólo en modo manual':'';
+        dashManual.classList.toggle('on',Manual.on && !isAuto);
+      }
+    }catch(e){
+      toast('Error leyendo estado. Verifica API Key (DEVKEY123).','err',e.detail||e.trace);
+    }
+  }
+};
 const Manual={on:false,setButton(on){this.on=!!on;const b=$('#btnManual'); b.classList.toggle('on',this.on); b.setAttribute('aria-pressed',this.on?'true':'false'); b.querySelector('.label').textContent=this.on?'Apagar':'Encender';},async toggle(){const desired=!this.on; try{const r=await API.post('/api/pump',{value:desired?'ON':'OFF',ttl_ms:30000,reason:'manual'}); this.setButton(desired); await Dash.refresh(); toast(desired?'Bomba encendida':'Bomba apagada','ok',r.trace);}catch(e){toast('No se pudo cambiar bomba','err',e.detail||e.trace)}},async applyDuty(){const on_ms=parseInt($('#onInput').value||'100',10); const off_ms=parseInt($('#offInput').value||'233',10); try{const r=await API.post('/api/actuator/duty',{on_ms,off_ms}); toast('Duty aplicado','ok',r.trace); await Dash.refresh();}catch(e){toast('No se pudo aplicar duty','err',e.detail||e.trace)}}};
 const Auto={on:false,setButton(on){this.on=!!on;const b=$('#btnAuto'); b.classList.toggle('on',this.on); b.querySelector('.label').textContent=this.on?'Parar':'Iniciar';},async toggle(){try{const r=await API.post('/api/mode/'+(this.on?'MANUAL_OFF':'AUTO')); this.setButton(!this.on); await Dash.refresh(); toast('Modo cambiado','ok',r.trace);}catch(e){toast('No se pudo cambiar modo','err',e.trace)}},async apply(){const target=parseFloat($('#targetPct').value||'65'); const hyst=parseFloat($('#hystPct').value||'5'); const guard=parseFloat($('#spillGuard').value||'1.2'); const lock=parseFloat($('#tankLowLock').value||'15'); try{const r=await API.patch('/api/config',{hopper:{cal:{target_pct:target,hysteresis_pct:hyst}}, auto:{anti_spill_margin_pct:guard,tank_low_lock_pct:lock}}); toast('Automático actualizado','ok',r.trace); await Dash.refresh();}catch(e){toast('No se pudo actualizar AUTO','err',e.trace)}}};
 const Calibration={async refresh(){try{const r=await API.get('/api/state'); const cfg=r.cfg; $('#tankEmpty').value=cfg.tank.cal.empty_mm; $('#tankFull').value=cfg.tank.cal.full_mm; $('#hopEmpty').value=cfg.hopper.cal.empty_mm; $('#hopFull').value=cfg.hopper.cal.full_mm;}catch(e){toast('No se pudo leer calibración','err',e.trace)}},async save(){const te=parseInt($('#tankEmpty').value||'800',10); const tf=parseInt($('#tankFull').value||'200',10); const he=parseInt($('#hopEmpty').value||'800',10); const hf=parseInt($('#hopFull').value||'200',10); if(!(te>tf)) return toast('Tanque: Vacío debe ser mayor a Lleno','err'); if(!(he>hf)) return toast('Tolva: Vacío debe ser mayor a Lleno','err'); try{const r=await API.patch('/api/config',{tank:{cal:{empty_mm:te,full_mm:tf}}, hopper:{cal:{empty_mm:he,full_mm:hf}}}); toast('Calibración guardada','ok',r.trace); await Dash.refresh();}catch(e){toast('Error guardando calibración','err',e.detail||e.trace)}}};
@@ -71,7 +115,63 @@ const Boards={
 };
 
 const Events={async refresh(){try{const r=await API.get('/api/events/tail?n=200'); $('#eventsTail').textContent=(r.lines||[]).join('\n');}catch(e){}}};
-function bind(){ const themeBtn=$('#themeToggle'); themeBtn.addEventListener('click',()=>document.getElementById('app').classList.toggle('theme-light')); $$('.swatch').forEach(b=>b.addEventListener('click',()=>document.documentElement.style.setProperty('--accent', b.dataset.accent))); $('#apiKey').value=API.key; $('#saveKey').addEventListener('click',()=>{API.key=$('#apiKey').value.trim(); localStorage.setItem('apiKey',API.key); toast('API Key guardada')}); $$('#app nav.tabs button').forEach(b=>b.addEventListener('click',async()=>{ $$('#app nav.tabs button').forEach(x=>x.classList.remove('active')); $$('.tab').forEach(x=>x.classList.remove('active')); b.classList.add('active'); const id=b.dataset.tab; $('#'+id).classList.add('active'); if(id==='calib') await Calibration.refresh(); if(id==='history') await History.refresh(); if(id==='events') await Events.refresh(); if(id==='boards') await Boards.refresh(); })); $('#btnManual').addEventListener('click',()=>Manual.toggle()); $('#applyDuty').addEventListener('click',()=>Manual.applyDuty()); $('#onInput').addEventListener('input',()=>$('#onVal').textContent=$('#onInput').value); $('#offInput').addEventListener('input',()=>$('#offVal').textContent=$('#offInput').value); $('#btnAuto').addEventListener('click',()=>Auto.toggle()); $('#applyAuto').addEventListener('click',()=>Auto.apply()); $('#btnSaveProf').addEventListener('click',()=>Profiles.save()); $('#refreshHistory').addEventListener('click',()=>History.refresh()); $('#btnSaveCal').addEventListener('click',()=>Calibration.save()); $('#btnPatchCfg').addEventListener('click',async()=>{const origins=$('#origins').value.split(',').map(s=>s.trim()).filter(Boolean); const api_key=$('#apiKeyCfg').value.trim(); const payload={}; if(origins.length) payload.allowed_origins=origins; if(api_key.length) payload.api_key=api_key; try{await API.patch('/api/config',payload); toast('Config guardada')}catch(e){toast('Error guardando config','err',e.trace)}}); $('#btnRefreshBoards').addEventListener('click',()=>Boards.refresh()); $('#btnAddBoard').addEventListener('click',()=>Boards.add());}
+function bind(){
+  const themeBtn=$('#themeToggle');
+  themeBtn.addEventListener('click',()=>document.getElementById('app').classList.toggle('theme-light'));
+  $$('.swatch').forEach(b=>b.addEventListener('click',()=>document.documentElement.style.setProperty('--accent', b.dataset.accent)));
+  $('#apiKey').value=API.key;
+  $('#saveKey').addEventListener('click',()=>{API.key=$('#apiKey').value.trim(); localStorage.setItem('apiKey',API.key); toast('API Key guardada')});
+
+  const nav=$('#app nav.tabs');
+  const tabToggle=$('#tabToggle');
+  const tabLabel=$('#tabToggleLabel');
+  const tabButtons=$$('#app nav.tabs .tab-menu button');
+  const closeMenu=()=>{if(nav) nav.classList.remove('open'); if(tabToggle) tabToggle.setAttribute('aria-expanded','false');};
+  const activateTab=async btn=>{
+    tabButtons.forEach(x=>x.classList.remove('active'));
+    $$('.tab').forEach(x=>x.classList.remove('active'));
+    btn.classList.add('active');
+    const id=btn.dataset.tab;
+    if(tabLabel) tabLabel.textContent=btn.textContent.trim();
+    $('#'+id).classList.add('active');
+    if(id==='calib') await Calibration.refresh();
+    if(id==='history') await History.refresh();
+    if(id==='events') await Events.refresh();
+    if(id==='boards') await Boards.refresh();
+  };
+  if(tabToggle){
+    tabToggle.addEventListener('click',ev=>{
+      ev.preventDefault();
+      if(!nav) return;
+      const isOpen=nav.classList.toggle('open');
+      tabToggle.setAttribute('aria-expanded',isOpen?'true':'false');
+    });
+  }
+  if(tabButtons.length){
+    const active=tabButtons.find(b=>b.classList.contains('active'))||tabButtons[0];
+    if(active && tabLabel) tabLabel.textContent=active.textContent.trim();
+    tabButtons.forEach(btn=>btn.addEventListener('click',async()=>{closeMenu(); await activateTab(btn);}));
+  }
+  document.addEventListener('click',ev=>{if(nav && nav.classList.contains('open') && !nav.contains(ev.target)) closeMenu();});
+  document.addEventListener('keydown',ev=>{if(ev.key==='Escape') closeMenu();});
+
+  $('#btnManual').addEventListener('click',()=>Manual.toggle());
+  $('#applyDuty').addEventListener('click',()=>Manual.applyDuty());
+  $('#onInput').addEventListener('input',()=>$('#onVal').textContent=$('#onInput').value);
+  $('#offInput').addEventListener('input',()=>$('#offVal').textContent=$('#offInput').value);
+  $('#btnAuto').addEventListener('click',()=>Auto.toggle());
+  $('#applyAuto').addEventListener('click',()=>Auto.apply());
+  $('#btnSaveProf').addEventListener('click',()=>Profiles.save());
+  $('#refreshHistory').addEventListener('click',()=>History.refresh());
+  $('#btnSaveCal').addEventListener('click',()=>Calibration.save());
+  $('#btnPatchCfg').addEventListener('click',async()=>{const origins=$('#origins').value.split(',').map(s=>s.trim()).filter(Boolean); const api_key=$('#apiKeyCfg').value.trim(); const payload={}; if(origins.length) payload.allowed_origins=origins; if(api_key.length) payload.api_key=api_key; try{await API.patch('/api/config',payload); toast('Config guardada')}catch(e){toast('Error guardando config','err',e.trace)}});
+  $('#btnRefreshBoards').addEventListener('click',()=>Boards.refresh());
+  $('#btnAddBoard').addEventListener('click',()=>Boards.add());
+  const dashAutoBtn=$('#dashAutoToggle');
+  const dashManualBtn=$('#dashManualToggle');
+  if(dashAutoBtn) dashAutoBtn.addEventListener('click',()=>Auto.toggle());
+  if(dashManualBtn) dashManualBtn.addEventListener('click',()=>Manual.toggle());
+}
 const History={data:[],async refresh(){try{const r=await API.get('/api/history?n=600'); this.data=r.items||[]; this.draw();}catch(e){toast('No se pudo leer histórico','err',e.trace)}}, draw(){const items=this.data; drawPlot($('#plotLevels'), items.map(x=>x.ts), [{label:'Tank %',values:items.map(x=>x.tank_pct)},{label:'Hopper %',values:items.map(x=>x.hopper_pct)}],'%'); drawPlot($('#plotRuntime'), items.map(x=>x.ts), [{label:'Runtime (s)',values:items.map(x=>x.runtime_s)}],'s'); drawPlot($('#plotPulses'), items.map(x=>x.ts), [{label:'Pulsos',values:items.map(x=>x.pulses)}],''); drawPlot($('#plotHz'), items.map(x=>x.ts), [{label:'Hz',values:items.map(x=>x.hz)}],'Hz'); drawPlot($('#plotDuty'), items.map(x=>x.ts), [{label:'Duty %',values:items.map(x=>x.duty)}],'%'); drawPlot($('#plotOnMs'), items.map(x=>x.ts), [{label:'ON ms',values:items.map(x=>x.on_ms)},{label:'OFF ms',values:items.map(x=>x.off_ms)}],'ms');}};
 function drawPlot(c,xs,series,unit){const ctx=c.getContext('2d'),W=c.width,H=c.height; ctx.clearRect(0,0,W,H); ctx.fillStyle='#0a0f14'; ctx.fillRect(0,0,W,H); const padL=48,padR=10,padT=12,padB=22; ctx.strokeStyle='#203042'; ctx.beginPath(); ctx.moveTo(padL,H-padB); ctx.lineTo(W-padR,H-padB); ctx.moveTo(padL,padT); ctx.lineTo(padL,H-padB); ctx.stroke(); if(xs.length<2) return; let min=+Infinity,max=-Infinity; series.forEach(s=>s.values.forEach(v=>{ if(v<min)min=v; if(v>max)max=v; })); if(!isFinite(min)||!isFinite(max)) return; if(Math.abs(max-min)<1e-6){ max+=1; min-=1;} const x0=xs[0],x1=xs[xs.length-1]; const X=i=>padL+(W-padL-padR)*((xs[i]-x0)/(x1-x0)); const Y=v=>H-padB-(H-padT-padB)*((v-min)/(max-min)); const colors=[getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()||'#00b3ff','#2bd97c','#ff7a59']; series.forEach((s,i)=>{ctx.strokeStyle=colors[i%colors.length]; ctx.lineWidth=2; ctx.beginPath(); for(let k=0;k<xs.length;k++){const x=X(k),y=Y(s.values[k]); if(k===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);} ctx.stroke();}); ctx.fillStyle='#9ab'; ctx.font='12px system-ui'; ctx.fillText(unit,W-padR-24,padT+12);}
 async function tick(){ try{await API.get('/api/diag');}catch(e){toast('Servidor/Key no válidos. Revisa API Key (DEVKEY123).','err')} await Dash.refresh(); await Boards.refresh(); await Events.refresh(); setTimeout(tick,2000); }

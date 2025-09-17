@@ -15,16 +15,22 @@
       <div class="apikey"><label>API Key <input id="apiKey" type="password" placeholder="DEVKEY123"></label><button id="saveKey" class="ghost">Guardar</button></div>
     </div>
   </header>
-  <nav class="tabs glass">
-    <button data-tab="dash" class="active">Dashboard</button>
-    <button data-tab="manual">Manual</button>
-    <button data-tab="auto">Automático</button>
-    <button data-tab="calib">Calibración</button>
-    <button data-tab="profiles">Perfiles</button>
-    <button data-tab="history">Gráficas</button>
-    <button data-tab="boards">Equipos</button>
-    <button data-tab="config">Config</button>
-    <button data-tab="events">Eventos</button>
+  <nav class="tabs glass" aria-label="Secciones principales">
+    <button id="tabToggle" class="tab-toggle pill" aria-haspopup="true" aria-expanded="false">
+      <span id="tabToggleLabel">Dashboard</span>
+      <span class="chevron">▾</span>
+    </button>
+    <div class="tab-menu" role="menu">
+      <button data-tab="dash" class="active" role="menuitem">Dashboard</button>
+      <button data-tab="manual" role="menuitem">Manual</button>
+      <button data-tab="auto" role="menuitem">Automático</button>
+      <button data-tab="calib" role="menuitem">Calibración</button>
+      <button data-tab="profiles" role="menuitem">Perfiles</button>
+      <button data-tab="history" role="menuitem">Gráficas</button>
+      <button data-tab="boards" role="menuitem">Equipos</button>
+      <button data-tab="config" role="menuitem">Config</button>
+      <button data-tab="events" role="menuitem">Eventos</button>
+    </div>
   </nav>
 
   <section id="dash" class="tab active">
@@ -45,6 +51,14 @@
         <li><span>Pulsos</span><b id="pulses">--</b></li>
         <li><span>Tiempo marcha</span><b id="runtime">--</b></li>
       </ul></div>
+      <div class="card glass actions-card">
+        <h3>Acciones rápidas</h3>
+        <div class="quick-actions" id="dashActions">
+          <button id="dashAutoToggle" class="pill wide">Iniciar automático</button>
+          <button id="dashManualToggle" class="pill ghost wide">Encender bomba</button>
+        </div>
+        <p class="hint">Controla el modo activo directamente desde el Dashboard.</p>
+      </div>
       <div class="card glass"><h3>Aprendizaje</h3><ul class="kv">
         <li><span>EMA ciclo</span><b id="emaRun">--</b> s</li>
         <li><span>Pendiente</span><b id="slope">--</b> %/s</li>
