@@ -14,6 +14,37 @@ function wifiBarsHTML(rssi){
     <span></span><span></span><span></span><span></span>
   </div>`;
 }
+function parseTimestamp(ts){
+  if(ts===null || ts===undefined) return null;
+  const n = typeof ts === 'number' ? ts : parseFloat(ts);
+  if(!Number.isFinite(n)) return null;
+  return n > 1e12 ? n : n * 1000;
+}
+function formatLastSeen(ts){
+  const ms = parseTimestamp(ts);
+  if(!ms) return '—';
+  try{
+    return new Date(ms).toLocaleString();
+  }catch(_){
+    return '—';
+  }
+}
+function formatDuration(seconds){
+  if(seconds===null || seconds===undefined) return '—';
+  const n = typeof seconds === 'number' ? seconds : parseFloat(seconds);
+  if(!Number.isFinite(n) || n <= 0) return '—';
+  const parts=[];
+  let remaining=Math.floor(n);
+  const days=Math.floor(remaining/86400); remaining%=86400;
+  const hours=Math.floor(remaining/3600); remaining%=3600;
+  const minutes=Math.floor(remaining/60); remaining%=60;
+  const secs=remaining;
+  if(days) parts.push(days+'d');
+  if(hours) parts.push(hours+'h');
+  if(minutes) parts.push(minutes+'m');
+  if(!parts.length || secs) parts.push(secs+'s');
+  return parts.join(' ');
+}
 function toast(msg,k='ok',trace=null){ const t=$('#toast'); t.innerHTML=(k==='ok'?'✅ ':'⚠️ ')+msg+(trace?`<br><small>trace:${trace}</small>`:''); t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2600); }
 function hz(on,off){const p=on+off;return p?1000.0/p:0} function duty(on,off){const p=on+off;return p?100.0*on/p:0}
 const Dash={
@@ -71,11 +102,23 @@ const Boards={
     try{
       const r = await API.get('/api/boards');
       const box = $('#boardsList');
-      const items = (r.items||r)||[];
-      box.innerHTML = items.map(b=>{
+      const data = Array.isArray(r) ? r : (r.boards || r.items || []);
+      data.sort((a,b)=>{
+        if(!!a.online === !!b.online){
+          return (a.name||a.board_id||'').localeCompare(b.name||b.board_id||'');
+        }
+        return a.online ? -1 : 1;
+      });
+      if(!data.length){
+        box.innerHTML = '<div class="card glass board empty"><p>No hay equipos registrados.</p></div>';
+        return;
+      }
+      box.innerHTML = data.map(b=>{
         const status = b.online ? 'online' : 'offline';
+        const statusText = b.online ? 'En línea' : 'Desconectado';
         const wifi = wifiBarsHTML(b.rssi);
-        const last = b.last_seen ? new Date(b.last_seen*1000||b.last_seen).toLocaleString() : '—';
+        const last = formatLastSeen(b.last_seen);
+        const uptime = formatDuration(b.uptime_s);
         return `<div class="card glass board ${status}">
           <div class="row">
             <div class="col">
@@ -84,16 +127,16 @@ const Boards={
             </div>
             <div class="col right">
               ${wifi}
-              <div class="pill ${status}">${status.toUpperCase()}</div>
+              <div class="pill ${status}" title="${statusText}">${statusText.toUpperCase()}</div>
             </div>
           </div>
           <div class="kv slim">
-            <div><span>IP</span><b>${b.ip||'—'}</b></div>
+            <div><span>IP</span><b>${b.last_ip||'—'}</b></div>
             <div><span>FW</span><b>${b.fw||'—'}</b></div>
             <div><span>MAC</span><b>${b.mac||'—'}</b></div>
-            <div><span>Uptime</span><b>${b.uptime_s?Math.round(b.uptime_s/60)+' min':'—'}</b></div>
-            <div><span>WS URL</span><b class="mono">${b.ws_url}</b></div>
-            <div><span>Token</span><b class="mono">${b.token}</b></div>
+            <div><span>Uptime</span><b>${uptime}</b></div>
+            <div><span>WS URL</span><b class="mono">${b.ws_url||'—'}</b></div>
+            <div><span>Token</span><b class="mono">${b.token||'—'}</b></div>
             <div><span>Último visto</span><b>${last}</b></div>
           </div>
         </div>`;
@@ -109,6 +152,10 @@ const Boards={
     try{
       await API.post('/api/boards', {board_id:id, token:tok, name:nm||undefined, kind:kd||undefined});
       toast('Equipo agregado');
+      $('#newBoardId').value='';
+      $('#newBoardToken').value='';
+      $('#newBoardName').value='';
+      $('#newBoardKind').value='';
       await Boards.refresh();
     }catch(e){ toast('No se pudo agregar','err', e.trace); }
   }
