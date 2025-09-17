@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
+#include <HardwareSerial.h>
 
 const char* FW_VERSION = "UX14";
 uint32_t boot_ms = 0;
