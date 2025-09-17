@@ -15,7 +15,11 @@ const char* BOARD_TOKEN = "test_ws_board_2025_ABCDEF";
 
 const int RX_PIN = 16;
 const int TX_PIN = 17;
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+HardwareSerial& US = Serial1;
+#else
 HardwareSerial& US = Serial2;
+#endif
 
 WebSocketsClient ws;
 uint32_t last_send_ms = 0;
