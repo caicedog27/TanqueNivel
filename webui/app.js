@@ -126,13 +126,17 @@ function bind(){
   const controlsToggle=$('#controlsToggle');
   const controlsLabel=controlsToggle?.querySelector('.label');
   const controlsChevron=controlsToggle?.querySelector('.chevron');
-  const setCollapsed=collapsed=>{
+  const setCollapsed=(collapsed,{scroll=true}={})=>{
     if(!headerEl) return;
     headerEl.classList.toggle('collapsed',collapsed);
+    headerEl.classList.toggle('expanded',!collapsed);
     if(controlsToggle){
       controlsToggle.setAttribute('aria-expanded',collapsed?'false':'true');
       if(controlsLabel) controlsLabel.textContent=collapsed?'Mostrar panel':'Ocultar panel';
       if(controlsChevron) controlsChevron.textContent=collapsed?'▾':'▴';
+    }
+    if(!collapsed && scroll){
+      requestAnimationFrame(()=>headerEl.scrollIntoView({behavior:'smooth',block:'start'}));
     }
   };
   if(controlsToggle && headerEl){
@@ -141,7 +145,7 @@ function bind(){
       setCollapsed(collapsed);
     });
     const mq=window.matchMedia('(max-width:720px)');
-    const applyResponsive=()=>setCollapsed(mq.matches);
+    const applyResponsive=()=>setCollapsed(mq.matches,{scroll:false});
     applyResponsive();
     mq.addEventListener('change',applyResponsive);
   }
