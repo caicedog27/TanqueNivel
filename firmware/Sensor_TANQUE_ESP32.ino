@@ -9,8 +9,7 @@ void setup(){
   US.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
   Serial.println("[US] Serial interface initialized");
   ensureWiFi();
-  wsConnect(BOARD_ID);
-  hello(BOARD_ID, "DYP-A01 TANQUE");
+  wsConnect(BOARD_ID, "DYP-A01 TANQUE");
 }
 void loop(){
   ws.loop();
@@ -29,8 +28,16 @@ void loop(){
   if(millis() - last_send_ms >= 1000){
     if(wCount > 0){
       float filt = filteredValue();
-      sendSample(SENSOR_ID, filt);
-      Serial.printf("[DATA] Sent filtered level: %.1f mm\n", filt);
+      if(wsReadyForSamples){
+        sendSample(SENSOR_ID, filt);
+        Serial.printf("[DATA] Sent filtered level: %.1f mm\n", filt);
+      } else {
+        static uint32_t lastHandshakeLog = 0;
+        if(millis() - lastHandshakeLog > 5000){
+          Serial.println("[WS] Waiting for handshake before sending samples");
+          lastHandshakeLog = millis();
+        }
+      }
     } else {
       Serial.println("[DATA] Waiting for valid sensor samples before reporting");
     }
