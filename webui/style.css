@@ -1,6 +1,9 @@
 :root{--bg:#0e1117;--bg2:#10151d;--ink:#e6edf3;--muted:#93a1b3;--card:#121826;--border:#1c2634;--accent:#00b3ff;--accent-2:#2bd97c;--danger:#ff4d4f}
 *{box-sizing:border-box}html,body{margin:0;background:linear-gradient(180deg,#0b0e13,#0c1017 40%,#0d111a);color:var(--ink);font-family:system-ui,Segoe UI,Roboto,Arial}
 header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid color-mix(in oklab,var(--border),transparent 20%);position:sticky;top:0;background:linear-gradient(135deg,rgba(16,20,30,.9),rgba(10,14,22,.72));backdrop-filter:blur(12px);box-shadow:0 18px 28px -24px rgba(0,0,0,.55);z-index:20}
+header.collapsed .controls{display:none}
+.controls-toggle{display:none;align-items:center;gap:10px;font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;padding:8px 14px}
+.controls-toggle .chevron{font-size:.95rem}
 .brand{flex:1 1 220px}
 .brand h1{margin:0;font-size:1.35rem;line-height:1.2;letter-spacing:.01em;display:flex;flex-direction:column;color:var(--ink)}
 .brand h1 small{font-size:.75rem;font-weight:500;color:var(--muted);letter-spacing:.18em;text-transform:uppercase;margin-top:4px}
@@ -103,6 +106,8 @@ button.wide{width:100%}
 @media (max-width:720px){
   header{flex-direction:column;align-items:stretch;gap:16px;padding:16px 14px}
   .brand h1{align-items:flex-start}
+  .controls-toggle{display:inline-flex;align-self:flex-start}
+  header.collapsed .controls-toggle{margin-bottom:0}
   .controls{width:100%;justify-content:flex-start;padding:12px 14px}
   .apikey{width:100%}
   .apikey button{flex:1 1 140px}

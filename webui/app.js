@@ -122,6 +122,30 @@ function bind(){
   $('#apiKey').value=API.key;
   $('#saveKey').addEventListener('click',()=>{API.key=$('#apiKey').value.trim(); localStorage.setItem('apiKey',API.key); toast('API Key guardada')});
 
+  const headerEl=$('#app > header');
+  const controlsToggle=$('#controlsToggle');
+  const controlsLabel=controlsToggle?.querySelector('.label');
+  const controlsChevron=controlsToggle?.querySelector('.chevron');
+  const setCollapsed=collapsed=>{
+    if(!headerEl) return;
+    headerEl.classList.toggle('collapsed',collapsed);
+    if(controlsToggle){
+      controlsToggle.setAttribute('aria-expanded',collapsed?'false':'true');
+      if(controlsLabel) controlsLabel.textContent=collapsed?'Mostrar panel':'Ocultar panel';
+      if(controlsChevron) controlsChevron.textContent=collapsed?'▾':'▴';
+    }
+  };
+  if(controlsToggle && headerEl){
+    controlsToggle.addEventListener('click',()=>{
+      const collapsed=!headerEl.classList.contains('collapsed');
+      setCollapsed(collapsed);
+    });
+    const mq=window.matchMedia('(max-width:720px)');
+    const applyResponsive=()=>setCollapsed(mq.matches);
+    applyResponsive();
+    mq.addEventListener('change',applyResponsive);
+  }
+
   const nav=$('#app nav.tabs');
   const tabToggle=$('#tabToggle');
   const tabLabel=$('#tabToggleLabel');
