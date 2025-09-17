@@ -89,3 +89,291 @@
 [2025-09-16 21:36:45] ACK ACT-01 actuator:pump
 [2025-09-16 21:37:17] TTL cutoff pump OFF
 [2025-09-16 21:37:17] ACK ACT-01 actuator:pump
+[2025-09-16 21:43:16] server started
+[2025-09-16 21:43:31] pump ON ttl=30000 reason=manual
+[2025-09-16 21:43:31] ACK ACT-01 actuator:pump
+[2025-09-16 21:43:40] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:43:40] ACK ACT-01 actuator:pump
+[2025-09-16 21:43:41] pump ON ttl=30000 reason=manual
+[2025-09-16 21:43:41] ACK ACT-01 actuator:pump
+[2025-09-16 21:43:49] duty set on=100 off=10
+[2025-09-16 21:43:49] ACK ACT-01 actuator:set
+[2025-09-16 21:43:51] duty set on=100 off=448
+[2025-09-16 21:43:51] ACK ACT-01 actuator:set
+[2025-09-16 21:43:54] duty set on=100 off=448
+[2025-09-16 21:43:54] ACK ACT-01 actuator:set
+[2025-09-16 21:43:58] duty set on=100 off=448
+[2025-09-16 21:43:58] ACK ACT-01 actuator:set
+[2025-09-16 21:44:00] duty set on=378 off=448
+[2025-09-16 21:44:00] ACK ACT-01 actuator:set
+[2025-09-16 21:44:08] mode set AUTO
+[2025-09-16 21:44:10] mode set MANUAL_OFF
+[2025-09-16 21:44:10] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:13] TTL cutoff pump OFF
+[2025-09-16 21:44:13] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:14] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:44:14] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:15] pump ON ttl=30000 reason=manual
+[2025-09-16 21:44:15] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:17] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:44:17] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:18] pump ON ttl=30000 reason=manual
+[2025-09-16 21:44:18] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:18] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:44:18] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:19] pump ON ttl=30000 reason=manual
+[2025-09-16 21:44:19] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:20] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:44:20] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:28] pump ON ttl=30000 reason=manual
+[2025-09-16 21:44:28] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:30] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:44:30] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:31] pump ON ttl=30000 reason=manual
+[2025-09-16 21:44:31] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:55] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:44:55] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:57] pump ON ttl=30000 reason=manual
+[2025-09-16 21:44:57] ACK ACT-01 actuator:pump
+[2025-09-16 21:44:58] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:44:58] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:00] pump ON ttl=30000 reason=manual
+[2025-09-16 21:45:00] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:04] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:45:04] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:10] duty set on=378 off=448
+[2025-09-16 21:45:10] ACK ACT-01 actuator:set
+[2025-09-16 21:45:12] pump ON ttl=30000 reason=manual
+[2025-09-16 21:45:12] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:15] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:45:15] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:17] pump ON ttl=30000 reason=manual
+[2025-09-16 21:45:17] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:18] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:45:18] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:18] pump ON ttl=30000 reason=manual
+[2025-09-16 21:45:18] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:19] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:45:19] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:20] pump ON ttl=30000 reason=manual
+[2025-09-16 21:45:20] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:21] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:45:21] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:22] pump ON ttl=30000 reason=manual
+[2025-09-16 21:45:22] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:22] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:45:22] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:23] pump ON ttl=30000 reason=manual
+[2025-09-16 21:45:23] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:24] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:45:24] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:33] mode set AUTO
+[2025-09-16 21:45:34] mode set MANUAL_OFF
+[2025-09-16 21:45:34] ACK ACT-01 actuator:pump
+[2025-09-16 21:45:37] mode set AUTO
+[2025-09-16 21:45:38] mode set MANUAL_OFF
+[2025-09-16 21:45:38] ACK ACT-01 actuator:pump
+[2025-09-16 21:47:12] mode set AUTO
+[2025-09-16 21:47:14] mode set MANUAL_OFF
+[2025-09-16 21:47:15] ACK ACT-01 actuator:pump
+[2025-09-16 21:47:16] pump ON ttl=30000 reason=manual
+[2025-09-16 21:47:16] ACK ACT-01 actuator:pump
+[2025-09-16 21:47:22] duty set on=378 off=2052
+[2025-09-16 21:47:22] ACK ACT-01 actuator:set
+[2025-09-16 21:47:25] duty set on=378 off=167
+[2025-09-16 21:47:25] ACK ACT-01 actuator:set
+[2025-09-16 21:47:32] duty set on=378 off=167
+[2025-09-16 21:47:32] ACK ACT-01 actuator:set
+[2025-09-16 21:47:34] duty set on=378 off=670
+[2025-09-16 21:47:34] ACK ACT-01 actuator:set
+[2025-09-16 21:47:48] TTL cutoff pump OFF
+[2025-09-16 21:48:09] WS closed ACT-01
+[2025-09-16 21:49:02] pump ON ttl=30000 reason=manual
+[2025-09-16 21:49:04] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:49:07] pump ON ttl=30000 reason=manual
+[2025-09-16 21:49:12] mode set AUTO
+[2025-09-16 21:49:13] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:49:23] pump ON ttl=30000 reason=manual
+[2025-09-16 21:49:30] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:49:36] duty set on=378 off=670
+[2025-09-16 21:49:37] pump ON ttl=30000 reason=manual
+[2025-09-16 21:49:54] WS accepted ACT-01 ACTUATOR
+[2025-09-16 21:49:54] ACK ACT-01 actuator:set
+[2025-09-16 21:49:54] ACK ACT-01 actuator:pump
+[2025-09-16 21:49:57] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:49:57] ACK ACT-01 actuator:pump
+[2025-09-16 21:50:02] pump ON ttl=30000 reason=manual
+[2025-09-16 21:50:02] ACK ACT-01 actuator:pump
+[2025-09-16 21:50:03] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:50:03] ACK ACT-01 actuator:pump
+[2025-09-16 21:50:04] pump ON ttl=30000 reason=manual
+[2025-09-16 21:50:04] ACK ACT-01 actuator:pump
+[2025-09-16 21:50:05] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:50:05] ACK ACT-01 actuator:pump
+[2025-09-16 21:50:07] pump ON ttl=30000 reason=manual
+[2025-09-16 21:50:07] ACK ACT-01 actuator:pump
+[2025-09-16 21:50:07] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:50:07] ACK ACT-01 actuator:pump
+[2025-09-16 21:50:08] pump ON ttl=30000 reason=manual
+[2025-09-16 21:50:08] ACK ACT-01 actuator:pump
+[2025-09-16 21:50:38] TTL cutoff pump OFF
+[2025-09-16 21:50:38] ACK ACT-01 actuator:pump
+[2025-09-16 21:51:13] pump ON ttl=30000 reason=manual
+[2025-09-16 21:51:13] ACK ACT-01 actuator:pump
+[2025-09-16 21:51:45] TTL cutoff pump OFF
+[2025-09-16 21:51:45] ACK ACT-01 actuator:pump
+[2025-09-16 21:51:58] pump ON ttl=30000 reason=manual
+[2025-09-16 21:51:58] ACK ACT-01 actuator:pump
+[2025-09-16 21:52:23] WS closed ACT-01
+[2025-09-16 21:52:25] server started
+[2025-09-16 21:52:28] WS accepted ACT-01 ACTUATOR
+[2025-09-16 21:52:28] ACK ACT-01 actuator:set
+[2025-09-16 21:52:28] ACK ACT-01 actuator:pump
+[2025-09-16 21:52:33] pump ON ttl=30000 reason=manual
+[2025-09-16 21:52:33] ACK ACT-01 actuator:pump
+[2025-09-16 21:52:37] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:52:37] ACK ACT-01 actuator:pump
+[2025-09-16 21:52:37] pump ON ttl=30000 reason=manual
+[2025-09-16 21:52:37] ACK ACT-01 actuator:pump
+[2025-09-16 21:52:38] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:52:38] ACK ACT-01 actuator:pump
+[2025-09-16 21:52:39] pump ON ttl=30000 reason=manual
+[2025-09-16 21:52:39] ACK ACT-01 actuator:pump
+[2025-09-16 21:52:40] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:52:40] ACK ACT-01 actuator:pump
+[2025-09-16 21:52:44] duty set on=100 off=764
+[2025-09-16 21:52:44] ACK ACT-01 actuator:set
+[2025-09-16 21:52:44] pump ON ttl=30000 reason=manual
+[2025-09-16 21:52:44] ACK ACT-01 actuator:pump
+[2025-09-16 21:53:10] WS closed ACT-01
+[2025-09-16 21:53:18] server started
+[2025-09-16 21:53:20] WS accepted ACT-01 ACTUATOR
+[2025-09-16 21:53:20] ACK ACT-01 actuator:set
+[2025-09-16 21:53:20] ACK ACT-01 actuator:pump
+[2025-09-16 21:53:27] pump ON ttl=30000 reason=manual
+[2025-09-16 21:53:27] ACK ACT-01 actuator:pump
+[2025-09-16 21:53:29] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:53:30] ACK ACT-01 actuator:pump
+[2025-09-16 21:53:47] pump ON ttl=30000 reason=manual
+[2025-09-16 21:53:47] ACK ACT-01 actuator:pump
+[2025-09-16 21:54:18] TTL cutoff pump OFF
+[2025-09-16 21:54:18] ACK ACT-01 actuator:pump
+[2025-09-16 21:54:33] WS closed ACT-01
+[2025-09-16 21:54:36] server started
+[2025-09-16 21:54:38] WS accepted ACT-01 ACTUATOR
+[2025-09-16 21:54:38] ACK ACT-01 actuator:set
+[2025-09-16 21:54:38] ACK ACT-01 actuator:pump
+[2025-09-16 21:55:16] WS accepted ACT-01 ACTUATOR
+[2025-09-16 21:55:16] ACK ACT-01 actuator:set
+[2025-09-16 21:55:16] ACK ACT-01 actuator:pump
+[2025-09-16 21:55:17] WS closed ACT-01
+[2025-09-16 21:55:55] WS closed ACT-01
+[2025-09-16 21:56:47] pump ON ttl=30000 reason=manual
+[2025-09-16 21:56:48] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:56:49] pump ON ttl=30000 reason=manual
+[2025-09-16 21:56:50] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:56:54] pump ON ttl=30000 reason=manual
+[2025-09-16 21:56:54] WS accepted ACT-01 ACTUATOR
+[2025-09-16 21:56:55] ACK ACT-01 actuator:set
+[2025-09-16 21:56:55] ACK ACT-01 actuator:pump
+[2025-09-16 21:56:56] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:56:56] ACK ACT-01 actuator:pump
+[2025-09-16 21:56:57] pump ON ttl=30000 reason=manual
+[2025-09-16 21:56:57] ACK ACT-01 actuator:pump
+[2025-09-16 21:56:58] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:56:59] ACK ACT-01 actuator:pump
+[2025-09-16 21:56:59] pump ON ttl=30000 reason=manual
+[2025-09-16 21:57:00] ACK ACT-01 actuator:pump
+[2025-09-16 21:57:01] pump OFF ttl=30000 reason=manual
+[2025-09-16 21:57:01] ACK ACT-01 actuator:pump
+[2025-09-16 21:57:18] mode set AUTO
+[2025-09-16 21:57:20] mode set MANUAL_OFF
+[2025-09-16 21:57:20] ACK ACT-01 actuator:pump
+[2025-09-16 21:57:28] mode set AUTO
+[2025-09-16 21:57:43] WS closed ACT-01
+[2025-09-16 22:13:34] server started
+[2025-09-16 22:13:38] WS accepted ACT-01 ACTUATOR
+[2025-09-16 22:13:38] ACK ACT-01 actuator:set
+[2025-09-16 22:13:38] ACK ACT-01 actuator:pump
+[2025-09-16 22:13:44] pump ON ttl=30000 reason=manual
+[2025-09-16 22:13:44] ACK ACT-01 actuator:pump
+[2025-09-16 22:13:46] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:13:46] ACK ACT-01 actuator:pump
+[2025-09-16 22:13:49] pump ON ttl=30000 reason=manual
+[2025-09-16 22:13:49] ACK ACT-01 actuator:pump
+[2025-09-16 22:13:50] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:13:50] ACK ACT-01 actuator:pump
+[2025-09-16 22:13:53] mode set AUTO
+[2025-09-16 22:13:54] mode set MANUAL_OFF
+[2025-09-16 22:13:54] ACK ACT-01 actuator:pump
+[2025-09-16 22:13:58] pump ON ttl=30000 reason=manual
+[2025-09-16 22:13:58] ACK ACT-01 actuator:pump
+[2025-09-16 22:14:30] TTL cutoff pump OFF
+[2025-09-16 22:14:30] ACK ACT-01 actuator:pump
+[2025-09-16 22:14:44] pump ON ttl=30000 reason=manual
+[2025-09-16 22:14:46] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:04] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:04] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:18] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:18] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:20] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:20] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:21] mode set AUTO
+[2025-09-16 22:15:23] mode set MANUAL_OFF
+[2025-09-16 22:15:23] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:25] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:25] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:26] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:26] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:31] mode set AUTO
+[2025-09-16 22:15:32] mode set MANUAL_OFF
+[2025-09-16 22:15:32] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:33] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:33] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:34] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:34] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:37] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:37] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:38] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:38] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:39] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:39] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:40] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:40] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:40] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:40] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:41] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:41] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:42] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:42] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:42] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:42] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:43] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:43] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:43] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:43] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:44] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:44] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:44] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:44] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:45] pump ON ttl=30000 reason=manual
+[2025-09-16 22:15:45] ACK ACT-01 actuator:pump
+[2025-09-16 22:15:45] pump OFF ttl=30000 reason=manual
+[2025-09-16 22:15:45] ACK ACT-01 actuator:pump
+[2025-09-16 22:22:18] WS closed ACT-01
+[2025-09-16 22:23:29] server started
+[2025-09-16 22:23:31] WS accepted ACT-01 ACTUATOR
+[2025-09-16 22:23:31] ACK ACT-01 actuator:set
+[2025-09-16 22:23:31] ACK ACT-01 actuator:pump
+[2025-09-16 22:23:57] mode set AUTO
+[2025-09-16 22:23:59] mode set MANUAL_OFF
+[2025-09-16 22:23:59] ACK ACT-01 actuator:pump
+[2025-09-16 22:23:59] pump ON ttl=30000 reason=manual
+[2025-09-16 22:23:59] ACK ACT-01 actuator:pump
+[2025-09-16 22:24:31] TTL cutoff pump OFF
+[2025-09-16 22:24:31] ACK ACT-01 actuator:pump
+[2025-09-16 22:37:42] WS closed ACT-01
+[2025-09-16 22:37:53] server started
+[2025-09-16 22:37:54] WS accepted ACT-01 ACTUATOR
+[2025-09-16 22:37:54] ACK ACT-01 actuator:set
+[2025-09-16 22:37:54] ACK ACT-01 actuator:pump

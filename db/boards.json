@@ -3,10 +3,10 @@
     "name": "Actuador Bomba",
     "kind": "ACTUATOR",
     "ip": "192.168.1.30",
-    "last_seen": 1758076303.4487696,
-    "rssi": -60,
+    "last_seen": 1758080274.354635,
+    "rssi": -63,
     "fw": "UX14",
     "mac": "24:6F:28:C5:F3:90",
-    "uptime_s": 4
+    "uptime_s": 3
   }
 }
