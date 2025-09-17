@@ -4,26 +4,26 @@
 #include <ArduinoJson.h>
 #include "esp_task_wdt.h"
 
-const char* WIFI_SSID = "PLANTA_VIVI_NAVE";
+const char* FW_VERSION = "UX14";
+uint32_t boot_ms = 0;
+
+
+const char* WIFI_SSID = "PLANTA_VIVO_NAVE";
 const char* WIFI_PASS = "901878434-1";
 const char* WS_HOST  = "192.168.1.68";
 const uint16_t WS_PORT = 8000;
 const char* BOARD_ID = "ACT-01";
 const char* BOARD_TOKEN = "test_ws_board_2025_ABCDEF";
 
-const int PULSE_PIN = 25;
-const int AIR_PIN   = 26;
-const int MAIN_PIN  = 27;
+const int PULSE_PIN = 16;
+const int AIR_PIN   = 18;
+const int MAIN_PIN  = 19;
 
 WebSocketsClient ws;
 bool pump_on = false;
 uint32_t on_ms = 100, off_ms = 233;
 uint32_t last_toggle_ms = 0; bool pulse_state = false;
 uint32_t pulses_total = 0, runtime_ms_total = 0, last_runtime_tick = 0, last_stats_send = 0;
-uint32_t last_wifi_report = 0, wifiReconnects = 0, lastWifiAttempt = 0;
-bool wifiInit = false;
-
-int wifiQuality(int32_t rssi){ if(rssi<=-100) return 0; if(rssi>=-50) return 100; return 2*(rssi+100); }
 
 void setup_wdt(){
   esp_task_wdt_config_t cfg = { .timeout_ms = 10000, .idle_core_mask = (1<<portNUM_PROCESSORS)-1, .trigger_panic = true };
@@ -33,42 +33,20 @@ void setup_wdt(){
 }
 
 void ensureWiFi(){
-  wl_status_t status = WiFi.status();
-  if (status == WL_CONNECTED) return;
-  uint32_t now = millis();
-  if(!wifiInit){ WiFi.mode(WIFI_STA); WiFi.persistent(false); WiFi.setSleep(false); WiFi.setAutoReconnect(true); wifiInit = true; }
-  if(now - lastWifiAttempt < 500) return;
-  lastWifiAttempt = now;
-  if(status == WL_CONNECT_FAILED || status == WL_CONNECTION_LOST || status == WL_NO_SSID_AVAIL || status == WL_DISCONNECTED){ WiFi.disconnect(false, true); delay(50); }
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  wifiReconnects++;
+  if (WiFi.status() == WL_CONNECTED) return;
+  WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.begin(WIFI_SSID, WIFI_PASS);
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000){
     esp_task_wdt_reset();
-    delay(150);
+    delay(120);
   }
 }
 
 void wsSendJson(DynamicJsonDocument &d){ String out; serializeJson(d, out); ws.sendTXT(out); }
 
-void sendWifiStatus(){
-  if(!ws.isConnected()) return;
-  DynamicJsonDocument d(256);
-  d["type"]="wifi:status";
-  wl_status_t st = WiFi.status();
-  int32_t rssi = (st==WL_CONNECTED)?WiFi.RSSI():-120;
-  d["rssi"]=rssi;
-  d["quality"]=wifiQuality(rssi);
-  d["reconnects"]=wifiReconnects;
-  d["uptime_ms"]=millis();
-  d["connected"]=(st==WL_CONNECTED);
-  d["ip"]=WiFi.localIP().toString();
-  wsSendJson(d);
-}
-
 void hello(){
   DynamicJsonDocument d(256);
-  d["type"]="hello"; d["id"]=BOARD_ID; d["kind"]="ACTUATOR"; d["name"]="Actuador Bomba"; d["token"]=BOARD_TOKEN;
+  d["type"]="hello"; d["id"]=BOARD_ID; d["kind"]="ACTUATOR"; d["name"]="Actuador Bomba"; d["token"]=BOARD_TOKEN; d["fw"]=FW_VERSION; d["mac"]=WiFi.macAddress(); d["rssi"]=WiFi.RSSI(); d["uptime_s"]=(millis()-boot_ms)/1000;
   wsSendJson(d);
 }
 
@@ -81,16 +59,17 @@ void setPump(bool on){
 }
 
 void onWsEvent(WStype_t type, uint8_t * payload, size_t length){
-  if(type == WStype_CONNECTED){ hello(); last_wifi_report = 0; sendWifiStatus(); }
-  else if(type == WStype_DISCONNECTED){ last_wifi_report = 0; }
+  if(type == WStype_CONNECTED){ hello(); }
   else if(type == WStype_TEXT){
     DynamicJsonDocument d(512); if(deserializeJson(d, payload, length)) return;
     const char* t = d["type"] | "";
     if(strcmp(t,"actuator:pump")==0){
       const char* v = d["value"] | "OFF"; setPump(strcmp(v,"ON")==0);
+      { DynamicJsonDocument a(192); a["type"]="ack"; a["cmd"]="actuator:pump"; a["value"]=v; a["ts"]=millis(); wsSendJson(a); }
     }else if(strcmp(t,"actuator:set")==0){
       on_ms = (uint32_t)(d["on_ms"] | on_ms);
       off_ms = (uint32_t)(d["off_ms"] | off_ms);
+      { DynamicJsonDocument a(192); a["type"]="ack"; a["cmd"]="actuator:set"; a["on_ms"]=on_ms; a["off_ms"]=off_ms; a["ts"]=millis(); wsSendJson(a); }
     }
   }
 }
@@ -99,8 +78,8 @@ void wsConnect(){
   String path = String("/ws/board/")+BOARD_ID+"?token="+BOARD_TOKEN;
   ws.begin(WS_HOST, WS_PORT, path.c_str());
   ws.onEvent(onWsEvent);
+  ws.setReconnectInterval(2000);
   ws.enableHeartbeat(15000, 3000, 2);
-  ws.setReconnectInterval(1500);
 }
 
 void sendStats(){
@@ -108,10 +87,13 @@ void sendStats(){
   d["type"]="actuator:stats";
   d["pulses_total"]=pulses_total;
   d["runtime_ms_total"]=runtime_ms_total;
+  d["rssi"]=WiFi.RSSI();
+  d["uptime_s"]=(millis()-boot_ms)/1000;
   wsSendJson(d);
 }
 
 void setup(){
+  boot_ms = millis();
   pinMode(PULSE_PIN, OUTPUT); pinMode(AIR_PIN, OUTPUT); pinMode(MAIN_PIN, OUTPUT);
   digitalWrite(PULSE_PIN, LOW); digitalWrite(AIR_PIN, LOW); digitalWrite(MAIN_PIN, LOW);
   Serial.begin(115200);
@@ -133,6 +115,5 @@ void loop(){
     }
   } else { last_runtime_tick = now; }
   if(now - last_stats_send > 1200){ sendStats(); last_stats_send = now; }
-  if(now - last_wifi_report > 10000){ sendWifiStatus(); last_wifi_report = now; }
   delay(1);
 }
