@@ -8,16 +8,16 @@ const char* FW_VERSION = "UX14";
 uint32_t boot_ms = 0;
 
 
-const char* WIFI_SSID = "PLANTA_VIVO_NAVE";
+const char* WIFI_SSID = "PLANTA_VIVI_NAVE";
 const char* WIFI_PASS = "901878434-1";
 const char* WS_HOST  = "192.168.1.68";
 const uint16_t WS_PORT = 8000;
 const char* BOARD_ID = "ACT-01";
 const char* BOARD_TOKEN = "test_ws_board_2025_ABCDEF";
 
-const int PULSE_PIN = 16;
-const int AIR_PIN   = 18;
-const int MAIN_PIN  = 19;
+const int PULSE_PIN = 25;
+const int AIR_PIN   = 26;
+const int MAIN_PIN  = 27;
 
 WebSocketsClient ws;
 bool pump_on = false;
