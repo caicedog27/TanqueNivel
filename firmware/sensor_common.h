@@ -1,4 +1,5 @@
 
+#include <Arduino.h>
 #include <WiFi.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
@@ -14,13 +15,16 @@ const char* WS_HOST  = "192.168.1.68";
 const uint16_t WS_PORT = 8000;
 const char* BOARD_TOKEN = "test_ws_board_2025_ABCDEF";
 
-const int RX_PIN = 16;
-const int TX_PIN = 17;
+const int SENSOR_RX_PIN = 16;
+const int SENSOR_TRIGGER_PIN = 17;
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
 HardwareSerial& US = Serial1;
 #else
 HardwareSerial& US = Serial2;
 #endif
+
+const uint32_t SENSOR_TRIGGER_INTERVAL_MS = 250;
+const uint32_t SENSOR_TRIGGER_PULSE_US = 2000;
 
 WebSocketsClient ws;
 uint32_t last_send_ms = 0;
@@ -48,6 +52,8 @@ float kalmanError = 0;
 void flushSensorBuffer();
 void resetWindow();
 void resetFilterState();
+void beginSensorInterface();
+void triggerSensorPulse();
 
 void ensureWiFi(){
   static uint8_t attempt = 0;
@@ -113,9 +119,25 @@ void wsConnect(const char* id, const char* name){ wsBoardId = id; wsBoardName = 
   ws.enableHeartbeat(15000, 3000, 2); }
 
 uint32_t lastSensorRead_ms = 0;
+uint32_t lastSensorTrigger_ms = 0;
 uint32_t sensorTimeout_ms = 2000;
 uint16_t sensorErrorCount = 0;
 bool sensorWarningPrinted = false;
+
+void beginSensorInterface(){
+  pinMode(SENSOR_TRIGGER_PIN, OUTPUT);
+  digitalWrite(SENSOR_TRIGGER_PIN, HIGH);
+  US.begin(9600, SERIAL_8N1, SENSOR_RX_PIN, -1);
+  flushSensorBuffer();
+  lastSensorTrigger_ms = millis() - SENSOR_TRIGGER_INTERVAL_MS;
+}
+
+void triggerSensorPulse(){
+  digitalWrite(SENSOR_TRIGGER_PIN, LOW);
+  delayMicroseconds(SENSOR_TRIGGER_PULSE_US);
+  digitalWrite(SENSOR_TRIGGER_PIN, HIGH);
+  lastSensorTrigger_ms = millis();
+}
 
 bool readBinaryFrame(float &mm){
   static uint8_t desyncCounter = 0;
@@ -170,6 +192,9 @@ bool readAsciiFrame(float &mm){
 bool readSensor(float &mm){
   static uint32_t lastPoll_ms = 0;
   uint32_t now = millis();
+  if((now - lastSensorTrigger_ms >= SENSOR_TRIGGER_INTERVAL_MS) && (US.available() < 4)){
+    triggerSensorPulse();
+  }
   if(now - lastPoll_ms < 25 && US.available() == 0){
     return false;
   }
@@ -323,10 +348,10 @@ void recoverSensorLink(){
   Serial.println("[US] Attempting to recover ultrasonic sensor link");
   US.end();
   delay(20);
-  US.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
-  flushSensorBuffer();
+  beginSensorInterface();
   resetWindow();
   resetFilterState();
   lastSensorRead_ms = millis();
   sensorWarningPrinted = false;
+  sensorErrorCount = 0;
 }
