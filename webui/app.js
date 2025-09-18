@@ -76,6 +76,7 @@ const Dash={
       $('#hystPct').value=cfg.hopper.cal.hysteresis_pct;
       $('#spillGuard').value=cfg.auto.anti_spill_margin_pct;
       $('#tankLowLock').value=cfg.auto.tank_low_lock_pct;
+      Auto.setTankSensor(cfg.auto.use_tank_sensor!==false);
       const dashAuto=$('#dashAutoToggle');
       const dashManual=$('#dashManualToggle');
       if(dashAuto && dashManual){
@@ -93,7 +94,54 @@ const Dash={
   }
 };
 const Manual={on:false,setButton(on){this.on=!!on;const b=$('#btnManual'); b.classList.toggle('on',this.on); b.setAttribute('aria-pressed',this.on?'true':'false'); b.querySelector('.label').textContent=this.on?'Apagar':'Encender';},async toggle(){const desired=!this.on; try{const r=await API.post('/api/pump',{value:desired?'ON':'OFF',ttl_ms:30000,reason:'manual'}); this.setButton(desired); await Dash.refresh(); toast(desired?'Bomba encendida':'Bomba apagada','ok',r.trace);}catch(e){toast('No se pudo cambiar bomba','err',e.detail||e.trace)}},async applyDuty(){const on_ms=parseInt($('#onInput').value||'100',10); const off_ms=parseInt($('#offInput').value||'233',10); try{const r=await API.post('/api/actuator/duty',{on_ms,off_ms}); toast('Duty aplicado','ok',r.trace); await Dash.refresh();}catch(e){toast('No se pudo aplicar duty','err',e.detail||e.trace)}}};
-const Auto={on:false,setButton(on){this.on=!!on;const b=$('#btnAuto'); b.classList.toggle('on',this.on); b.querySelector('.label').textContent=this.on?'Parar':'Iniciar';},async toggle(){try{const r=await API.post('/api/mode/'+(this.on?'MANUAL_OFF':'AUTO')); this.setButton(!this.on); await Dash.refresh(); toast('Modo cambiado','ok',r.trace);}catch(e){toast('No se pudo cambiar modo','err',e.trace)}},async apply(){const target=parseFloat($('#targetPct').value||'65'); const hyst=parseFloat($('#hystPct').value||'5'); const guard=parseFloat($('#spillGuard').value||'1.2'); const lock=parseFloat($('#tankLowLock').value||'15'); try{const r=await API.patch('/api/config',{hopper:{cal:{target_pct:target,hysteresis_pct:hyst}}, auto:{anti_spill_margin_pct:guard,tank_low_lock_pct:lock}}); toast('Automático actualizado','ok',r.trace); await Dash.refresh();}catch(e){toast('No se pudo actualizar AUTO','err',e.trace)}}};
+const Auto={
+  on:false,
+  tankSensor:true,
+  setButton(on){
+    this.on=!!on;
+    const b=$('#btnAuto');
+    b.classList.toggle('on',this.on);
+    b.querySelector('.label').textContent=this.on?'Parar':'Iniciar';
+  },
+  setTankSensor(enabled){
+    this.tankSensor=!!enabled;
+    const b=$('#tankSensorToggle');
+    if(!b) return;
+    b.classList.toggle('on',!this.tankSensor);
+    b.setAttribute('aria-pressed',this.tankSensor?'false':'true');
+    b.textContent=this.tankSensor?'Ignorar sensor tanque':'Usar sensor tanque';
+    b.title=this.tankSensor?'El automático se bloqueará si el tanque está bajo':'El automático ignorará el sensor del tanque';
+  },
+  async toggle(){
+    try{
+      const r=await API.post('/api/mode/'+(this.on?'MANUAL_OFF':'AUTO'));
+      this.setButton(!this.on);
+      await Dash.refresh();
+      toast('Modo cambiado','ok',r.trace);
+    }catch(e){toast('No se pudo cambiar modo','err',e.trace)}
+  },
+  async apply(){
+    const target=parseFloat($('#targetPct').value||'65');
+    const hyst=parseFloat($('#hystPct').value||'5');
+    const guard=parseFloat($('#spillGuard').value||'1.2');
+    const lock=parseFloat($('#tankLowLock').value||'15');
+    try{
+      const r=await API.patch('/api/config',{hopper:{cal:{target_pct:target,hysteresis_pct:hyst}}, auto:{anti_spill_margin_pct:guard,tank_low_lock_pct:lock}});
+      toast('Automático actualizado','ok',r.trace);
+      await Dash.refresh();
+    }catch(e){toast('No se pudo actualizar AUTO','err',e.trace)}
+  },
+  async toggleTankSensor(){
+    const desired=!this.tankSensor;
+    try{
+      const r=await API.patch('/api/config',{auto:{use_tank_sensor:desired}});
+      await Dash.refresh();
+      toast(desired?'Sensor de tanque habilitado':'Sensor de tanque ignorado','ok',r.trace);
+    }catch(e){
+      toast('No se pudo actualizar sensor tanque','err',e.trace||e.detail);
+    }
+  }
+};
 const Calibration={async refresh(){try{const r=await API.get('/api/state'); const cfg=r.cfg; $('#tankEmpty').value=cfg.tank.cal.empty_mm; $('#tankFull').value=cfg.tank.cal.full_mm; $('#hopEmpty').value=cfg.hopper.cal.empty_mm; $('#hopFull').value=cfg.hopper.cal.full_mm;}catch(e){toast('No se pudo leer calibración','err',e.trace)}},async save(){const te=parseInt($('#tankEmpty').value||'800',10); const tf=parseInt($('#tankFull').value||'200',10); const he=parseInt($('#hopEmpty').value||'800',10); const hf=parseInt($('#hopFull').value||'200',10); if(!(te>tf)) return toast('Tanque: Vacío debe ser mayor a Lleno','err'); if(!(he>hf)) return toast('Tolva: Vacío debe ser mayor a Lleno','err'); try{const r=await API.patch('/api/config',{tank:{cal:{empty_mm:te,full_mm:tf}}, hopper:{cal:{empty_mm:he,full_mm:hf}}}); toast('Calibración guardada','ok',r.trace); await Dash.refresh();}catch(e){toast('Error guardando calibración','err',e.detail||e.trace)}}};
 const Profiles={async refresh(){try{const r=await API.get('/api/profiles'); const box=$('#profilesList'); box.innerHTML=''; (r.profiles||[]).forEach(p=>{const div=document.createElement('div'); div.className='item'; div.innerHTML=`<span class="name">${p.name}</span><span class="badge">${p.on_ms}/${p.off_ms} ms</span><span><button class="ghost" data-apply="${p.name}">Aplicar</button><button class="ghost" data-del="${p.name}">Borrar</button></span>`; box.appendChild(div);}); box.onclick=async ev=>{const b=ev.target.closest('button'); if(!b) return; if(b.dataset.apply){try{await API.post('/api/profiles/apply/'+b.dataset.apply,{}); toast('Perfil aplicado'); await Dash.refresh();}catch(e){toast('Error al aplicar','err',e.trace)}} else if(b.dataset.del){try{await API.del('/api/profiles/'+b.dataset.del); toast('Perfil eliminado'); await Profiles.refresh();}catch(e){toast('Error al eliminar','err',e.trace)}}};}catch(e){toast('No se pudieron leer perfiles','err',e.trace)}}, async save(){const name=($('#profName').value||'').trim(); const on_ms=parseInt($('#profOn').value||'100',10); const off_ms=parseInt($('#profOff').value||'233',10); if(!name) return toast('Pon un nombre de perfil','err'); try{await API.post('/api/profiles',{name,on_ms,off_ms}); toast('Perfil guardado'); await Profiles.refresh();}catch(e){toast('No se pudo guardar perfil','err',e.trace)}}};
 
@@ -236,6 +284,8 @@ function bind(){
   $('#offInput').addEventListener('input',()=>$('#offVal').textContent=$('#offInput').value);
   $('#btnAuto').addEventListener('click',()=>Auto.toggle());
   $('#applyAuto').addEventListener('click',()=>Auto.apply());
+  const tankSensorBtn=$('#tankSensorToggle');
+  if(tankSensorBtn) tankSensorBtn.addEventListener('click',()=>Auto.toggleTankSensor());
   $('#btnSaveProf').addEventListener('click',()=>Profiles.save());
   $('#refreshHistory').addEventListener('click',()=>History.refresh());
   $('#btnSaveCal').addEventListener('click',()=>Calibration.save());
