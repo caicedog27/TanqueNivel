@@ -18,6 +18,7 @@ EVENTS_PATH = os.path.join(DB_DIR, "events.log")
 HISTORY_PATH = os.path.join(DB_DIR, "history.jsonl")
 PROFILES_PATH = os.path.join(DB_DIR, "profiles.json")
 BOARDS_CACHE_PATH = os.path.join(DB_DIR, "boards.json")
+AUTO_MODEL_PATH = os.path.join(DB_DIR, "auto_model.json")
 
 def log_event(msg: str):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -126,7 +127,104 @@ def save_json(path, data):
 
 CFG = AppCfg(**load_json(CFG_PATH, {}))
 if not os.path.exists(CFG_PATH): save_json(CFG_PATH, json.loads(CFG.model_dump_json()))
+def persist_auto_model():
+    try:
+        save_json(AUTO_MODEL_PATH, json.loads(STATE.auto_model.model_dump_json()))
+    except Exception as e:
+        log_event(f"auto_model save err {e}")
+
 STATE = AppState()
+
+def load_auto_model_state():
+    data = load_json(AUTO_MODEL_PATH, None)
+    if not data:
+        return
+    try:
+        STATE.auto_model = AutoModel(**data)
+    except Exception as e:
+        log_event(f"auto_model load err {e}")
+
+load_auto_model_state()
+if not os.path.exists(AUTO_MODEL_PATH):
+    persist_auto_model()
+
+def ema_update(current: float, value: float, alpha: float) -> float:
+    if value < 0:
+        return current
+    if current <= 0:
+        return value
+    return (1.0 - alpha) * current + alpha * value
+
+AUTO_LEARN = {
+    "active": False,
+    "start_ts": 0.0,
+    "start_pct": 0.0,
+    "first_rise_ts": None,
+    "source": "",
+}
+
+def auto_learn_reset():
+    AUTO_LEARN.update({
+        "active": False,
+        "start_ts": 0.0,
+        "start_pct": 0.0,
+        "first_rise_ts": None,
+        "source": "",
+    })
+
+def auto_learn_pump_on(source: str):
+    now = time.time()
+    if AUTO_LEARN["active"]:
+        AUTO_LEARN["start_ts"] = now
+        AUTO_LEARN["start_pct"] = STATE.hopper.filtered_pct
+        AUTO_LEARN["first_rise_ts"] = None
+        AUTO_LEARN["source"] = source
+        return
+    AUTO_LEARN.update({
+        "active": True,
+        "start_ts": now,
+        "start_pct": STATE.hopper.filtered_pct,
+        "first_rise_ts": None,
+        "source": source,
+    })
+
+def auto_learn_track_progress():
+    if not AUTO_LEARN["active"]:
+        return
+    if AUTO_LEARN["first_rise_ts"] is not None:
+        return
+    if STATE.hopper.filtered_pct > AUTO_LEARN["start_pct"] + 0.25:
+        AUTO_LEARN["first_rise_ts"] = time.time()
+
+def auto_learn_pump_off(source: str):
+    if not AUTO_LEARN["active"]:
+        return
+    now = time.time()
+    start_ts = AUTO_LEARN["start_ts"]
+    if start_ts <= 0:
+        auto_learn_reset()
+        return
+    run_s = max(0.0, now - start_ts)
+    start_pct = AUTO_LEARN.get("start_pct", 0.0)
+    end_pct = STATE.hopper.filtered_pct
+    delta_pct = end_pct - start_pct
+    alpha = clamp(CFG.auto.ema_alpha, 0.05, 0.95)
+    if run_s > 1.0 and delta_pct > 0.1:
+        slope = delta_pct / max(run_s, 0.1)
+        inertia_s = 0.0
+        if AUTO_LEARN.get("first_rise_ts"):
+            inertia_s = max(0.0, AUTO_LEARN["first_rise_ts"] - start_ts)
+        target = CFG.hopper.cal.target_pct
+        off_threshold = target + CFG.auto.anti_spill_margin_pct
+        overshoot = max(0.0, end_pct - off_threshold)
+        STATE.auto_model.ema_run_s = ema_update(STATE.auto_model.ema_run_s, run_s, alpha)
+        STATE.auto_model.ema_slope_pct_s = ema_update(STATE.auto_model.ema_slope_pct_s, slope, alpha)
+        if inertia_s > 0:
+            STATE.auto_model.ema_inertia_s = ema_update(STATE.auto_model.ema_inertia_s, inertia_s, alpha)
+        STATE.auto_model.ema_overshoot_pct = ema_update(STATE.auto_model.ema_overshoot_pct, overshoot, alpha)
+        persist_auto_model()
+        log_event(f"auto_learn cycle source={source} run={run_s:.1f}s delta={delta_pct:.1f}% slope={slope:.2f}%/s overshoot={overshoot:.2f}%")
+    auto_learn_reset()
 
 app = FastAPI(title="TanqueNivel Industrial", version="UX13")
 app.add_middleware(CORSMiddleware, allow_origins=CFG.net.allowed_origins or ["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -283,6 +381,10 @@ async def api_pump(req:PumpReq, _:bool=Depends(require_api_key)):
     STATE.actuator.pump_on = (v=="ON")
     STATE.actuator.last_command_ts = time.time()
     STATE.actuator.ttl_ms = req.ttl_ms
+    if v == "ON":
+        auto_learn_pump_on(req.reason or "manual")
+    else:
+        auto_learn_pump_off(req.reason or "manual")
     if STATE.actuator.board_id in BOARDS:
         await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":v})
     log_event(f"pump {v} ttl={req.ttl_ms} reason={req.reason}")
@@ -294,6 +396,7 @@ async def api_mode(mode:str, _:bool=Depends(require_api_key)):
     if mode not in ("AUTO","MANUAL_OFF"): raise HTTPException(400,"modo inválido")
     STATE.mode = mode
     if mode=="MANUAL_OFF" and STATE.actuator.board_id in BOARDS:
+        auto_learn_pump_off("mode_change")
         await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
     log_event(f"mode set {mode}")
     return {"ok": True, "trace": int(time.time()*1000)}
@@ -443,6 +546,7 @@ async def history_loop():
         # TTL safety
         if STATE.actuator.pump_on and STATE.actuator.ttl_ms>0 and (time.time()-STATE.actuator.last_command_ts)*1000 > STATE.actuator.ttl_ms:
             STATE.actuator.pump_on=False
+            auto_learn_pump_off("ttl")
             if STATE.actuator.board_id in BOARDS:
                 try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
                 except: pass
@@ -464,6 +568,7 @@ async def history_loop():
             if tank_ok and STATE.hopper.filtered_pct < (targ - hyst):
                 if not STATE.actuator.pump_on:
                     STATE.actuator.pump_on=True; STATE.actuator.last_command_ts=time.time()
+                    auto_learn_pump_on("auto")
                     if STATE.actuator.board_id in BOARDS:
                         try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"ON"})
                         except: pass
@@ -471,14 +576,23 @@ async def history_loop():
             if STATE.hopper.filtered_pct >= (targ + guard):
                 if STATE.actuator.pump_on:
                     STATE.actuator.pump_on=False
+                    auto_learn_pump_off("auto")
                     if STATE.actuator.board_id in BOARDS:
                         try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
                         except: pass
                     log_event("AUTO: pump OFF")
+        if STATE.actuator.pump_on:
+            auto_learn_track_progress()
 
 @app.on_event("startup")
 async def on_start():
-    for p, init in [(EVENTS_PATH,""),(HISTORY_PATH,""),(PROFILES_PATH,'{"profiles":[]}'),(BOARDS_CACHE_PATH,"{}")]:
+    for p, init in [
+        (EVENTS_PATH,""),
+        (HISTORY_PATH,""),
+        (PROFILES_PATH,'{"profiles":[]}'),
+        (BOARDS_CACHE_PATH,"{}"),
+        (AUTO_MODEL_PATH, STATE.auto_model.model_dump_json()),
+    ]:
         if not os.path.exists(p):
             with open(p,"w",encoding="utf-8") as f: f.write(init)
     asyncio.create_task(history_loop())

@@ -52,6 +52,11 @@ const Dash={
     try{
       const r=await API.get('/api/state');
       const st=r.state,cfg=r.cfg;
+      const fmt=(v,d=1,zeroOk=false)=>{
+        if(typeof v!=='number' || !Number.isFinite(v)) return '--';
+        if(v<=0 && !zeroOk) return '--';
+        return v.toFixed(d);
+      };
       $('#modeLbl').textContent=st.mode;
       const pumpLbl=$('#pumpLbl');
       pumpLbl.textContent=st.actuator.pump_on?'ON':'OFF';
@@ -71,6 +76,11 @@ const Dash={
       $('#offInput').value=st.actuator.off_ms;
       $('#onVal').textContent=st.actuator.on_ms;
       $('#offVal').textContent=st.actuator.off_ms;
+      const model=st.auto_model||{};
+      $('#emaRun').textContent=fmt(model.ema_run_s,1);
+      $('#slope').textContent=fmt(model.ema_slope_pct_s,3);
+      $('#inertia').textContent=fmt(model.ema_inertia_s,1,true);
+      $('#overshoot').textContent=fmt(model.ema_overshoot_pct,2,true);
       Auto.setButton(st.mode==='AUTO');
       $('#targetPct').value=cfg.hopper.cal.target_pct;
       $('#hystPct').value=cfg.hopper.cal.hysteresis_pct;
