@@ -1,0 +1,6 @@
+{
+  "ema_run_s": 0.0,
+  "ema_slope_pct_s": 0.0,
+  "ema_inertia_s": 0.0,
+  "ema_overshoot_pct": 0.0
+}
