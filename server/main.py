@@ -48,6 +48,7 @@ class AutoCfg(BaseModel):
     anti_spill_margin_pct: float = Field(1.2, ge=0.0, le=10.0)
     ema_alpha: float = Field(0.2, ge=0.05, le=0.9)
     tank_low_lock_pct: float = Field(15.0, ge=0.0, le=50.0)
+    use_tank_sensor: bool = True
 
 class TankCfg(BaseModel):
     cal: SensorCal = Field(default_factory=SensorCal)
@@ -459,7 +460,7 @@ async def history_loop():
         # AUTO
         if STATE.mode=="AUTO":
             targ = CFG.hopper.cal.target_pct; hyst = CFG.hopper.cal.hysteresis_pct; guard = CFG.auto.anti_spill_margin_pct
-            tank_ok = STATE.tank.filtered_pct > CFG.auto.tank_low_lock_pct
+            tank_ok = True if not CFG.auto.use_tank_sensor else STATE.tank.filtered_pct > CFG.auto.tank_low_lock_pct
             if tank_ok and STATE.hopper.filtered_pct < (targ - hyst):
                 if not STATE.actuator.pump_on:
                     STATE.actuator.pump_on=True; STATE.actuator.last_command_ts=time.time()
