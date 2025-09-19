@@ -98,6 +98,7 @@ const Dash={
         dashManual.title=isAuto?'Disponible sólo en modo manual':'';
         dashManual.classList.toggle('on',Manual.on && !isAuto);
       }
+      Alerts.process(st,cfg);
     }catch(e){
       toast('Error leyendo estado. Verifica API Key (DEVKEY123).','err',e.detail||e.trace);
     }
@@ -220,12 +221,137 @@ const Boards={
 };
 
 const Events={async refresh(){try{const r=await API.get('/api/events/tail?n=200'); $('#eventsTail').textContent=(r.lines||[]).join('\n');}catch(e){}}};
+const Alerts={
+  lastState:null,
+  pumpOnSince:null,
+  pumpStartPct:null,
+  filterAlerted:false,
+  lastSpokenAt:new Map(),
+  audioCtx:null,
+  init(){
+    const resume=()=>this.resumeAudio();
+    ['click','touchstart','keydown'].forEach(ev=>document.addEventListener(ev,resume,{once:true}));
+  },
+  resumeAudio(){
+    const Ctx=window.AudioContext||window.webkitAudioContext;
+    if(!Ctx) return;
+    if(!this.audioCtx){
+      try{this.audioCtx=new Ctx();}
+      catch(_){this.audioCtx=null;return;}
+    }
+    if(this.audioCtx && this.audioCtx.state==='suspended'){
+      this.audioCtx.resume().catch(()=>{});
+    }
+  },
+  ensureCtx(){
+    this.resumeAudio();
+    return this.audioCtx||null;
+  },
+  playTone(freq=880,duration=0.25,volume=0.18,type='sine'){
+    const ctx=this.ensureCtx();
+    if(!ctx) return;
+    try{
+      const osc=ctx.createOscillator();
+      const gain=ctx.createGain();
+      osc.type=type;
+      osc.frequency.value=freq;
+      gain.gain.value=volume;
+      osc.connect(gain).connect(ctx.destination);
+      const now=ctx.currentTime;
+      osc.start(now);
+      osc.stop(now+Math.max(0.05,duration));
+    }catch(_){/* ignore audio errors */}
+  },
+  speak(text,{lang='es-MX',rate=1,pitch=1}={}){
+    if(!('speechSynthesis' in window)) return;
+    try{
+      const u=new SpeechSynthesisUtterance(text);
+      u.lang=lang;
+      u.rate=rate;
+      u.pitch=pitch;
+      window.speechSynthesis.speak(u);
+    }catch(_){/* ignore speech errors */}
+  },
+  notify(text,{alert=false,throttleMs=7000}={}){
+    const now=Date.now();
+    const last=this.lastSpokenAt.get(text)||0;
+    if(now-last<throttleMs) return;
+    this.lastSpokenAt.set(text,now);
+    if(alert){
+      this.playTone(760,0.4,0.25,'square');
+      const self=this;
+      setTimeout(()=>self.playTone(520,0.6,0.22,'sawtooth'),450);
+    }else{
+      this.playTone(880,0.22,0.18,'sine');
+    }
+    this.speak(text,alert?{lang:'es-MX',rate:0.95,pitch:0.9}:{lang:'es-MX'});
+  },
+  cloneState(state){
+    try{return structuredClone(state);}catch(_){return JSON.parse(JSON.stringify(state||{}));}
+  },
+  process(state,cfg){
+    if(!state) return;
+    if(!this.lastState){
+      this.lastState=this.cloneState(state);
+      return;
+    }
+    const prev=this.lastState;
+    const now=Date.now();
+    if(state.mode!==prev.mode){
+      if(state.mode==='AUTO'){
+        if(prev.mode==='MANUAL_OFF') this.notify('Finalización modo manual',{throttleMs:5000});
+        this.notify('Inicio modo automático');
+      }else if(state.mode==='MANUAL_OFF' && prev.mode!=='MANUAL_OFF'){
+        this.notify('Inicio modo manual');
+      }
+    }
+    const pumpOn=!!(state.actuator&&state.actuator.pump_on);
+    const pumpPrev=!!(prev.actuator&&prev.actuator.pump_on);
+    if(pumpOn!==pumpPrev){
+      if(pumpOn){
+        this.notify('Inicio de llenado de tolva');
+        this.pumpOnSince=now;
+        this.pumpStartPct=state.hopper?.filtered_pct??0;
+        this.filterAlerted=false;
+      }else{
+        this.pumpOnSince=null;
+        this.pumpStartPct=null;
+        this.filterAlerted=false;
+      }
+    }
+    const target=((cfg?.hopper?.cal?.target_pct??65)+(cfg?.auto?.anti_spill_margin_pct??1.2));
+    const hopperPct=state.hopper?.filtered_pct??0;
+    const hopperPrev=prev.hopper?.filtered_pct??0;
+    if(hopperPct>=target && hopperPrev<target){
+      this.notify('Tolva llena');
+    }
+    if(pumpOn){
+      if(this.pumpOnSince===null){
+        this.pumpOnSince=now;
+        this.pumpStartPct=hopperPct;
+        this.filterAlerted=false;
+      }
+      const runMs=now-(this.pumpOnSince||now);
+      const rise=hopperPct-(this.pumpStartPct??hopperPct);
+      const learnedMs=(state.auto_model?.ema_run_s??0)*1000;
+      const limit=Math.max(learnedMs*1.8,180000);
+      const minRise=Math.max(1.0,(cfg?.hopper?.cal?.hysteresis_pct??5)*0.2);
+      if(!this.filterAlerted && runMs>limit && rise<minRise){
+        this.notify('Atención. Se superó el tiempo de llenado y el nivel no aumentó. Limpiar el filtro.',{alert:true,throttleMs:60000});
+        this.filterAlerted=true;
+      }
+    }
+    this.lastState=this.cloneState(state);
+  }
+};
 function bind(){
   const themeBtn=$('#themeToggle');
   themeBtn.addEventListener('click',()=>document.getElementById('app').classList.toggle('theme-light'));
   $$('.swatch').forEach(b=>b.addEventListener('click',()=>document.documentElement.style.setProperty('--accent', b.dataset.accent)));
   $('#apiKey').value=API.key;
   $('#saveKey').addEventListener('click',()=>{API.key=$('#apiKey').value.trim(); localStorage.setItem('apiKey',API.key); toast('API Key guardada')});
+
+  Alerts.init();
 
   const headerEl=$('#app > header');
   const controlsToggle=$('#controlsToggle');
