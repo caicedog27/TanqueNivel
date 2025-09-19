@@ -4,6 +4,7 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <math.h>
+#include <cstring>
 
 const char* FW_VERSION = "UX15";
 uint32_t boot_ms = 0;
@@ -17,14 +18,21 @@ const char* BOARD_TOKEN = "test_ws_board_2025_ABCDEF";
 
 const int SENSOR_RX_PIN = 16;
 const int SENSOR_TRIGGER_PIN = 17;
+#ifndef SENSOR_ID
+extern const char* SENSOR_ID;
+#endif
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
 HardwareSerial& US = Serial1;
 #else
 HardwareSerial& US = Serial2;
 #endif
 
-const uint32_t SENSOR_TRIGGER_INTERVAL_MS = 250;
+const uint32_t SENSOR_TRIGGER_INTERVAL_MS = 200;
 const uint32_t SENSOR_TRIGGER_PULSE_US = 2000;
+const uint32_t SENSOR_POLL_MIN_INTERVAL_MS = 15;
+const uint32_t SENSOR_WARNING_AFTER_MS = 5000;
+const uint32_t SENSOR_FAULT_AFTER_MS = 10000;
+const uint32_t SENSOR_STATUS_THROTTLE_MS = 2500;
 
 WebSocketsClient ws;
 uint32_t last_send_ms = 0;
@@ -34,13 +42,24 @@ const char* wsBoardId = nullptr;
 const char* wsBoardName = nullptr;
 bool wsReadyForSamples = false;
 
+enum SensorHealthState : uint8_t {
+  SENSOR_HEALTH_OK = 0,
+  SENSOR_HEALTH_WARNING = 1,
+  SENSOR_HEALTH_FAULT = 2,
+  SENSOR_HEALTH_UNKNOWN = 3
+};
+
+SensorHealthState lastHealthState = SENSOR_HEALTH_UNKNOWN;
+char lastHealthReason[32] = "";
+uint32_t lastHealthReport_ms = 0;
+
 // --- Advanced filtering configuration ---
 const float MIN_LEVEL_MM = 50.0f;
 const float MAX_LEVEL_MM = 4500.0f;
-const float MAX_STEP_MM = 120.0f;
+const float MAX_STEP_MM = 200.0f;
 const float MIN_MEASUREMENT_VAR = 25.0f;        // (5 mm)^2
 const float MAX_MEASUREMENT_VAR = 250000.0f;    // (500 mm)^2
-const float PROCESS_NOISE_PER_SECOND = 2500.0f; // mm^2 / s
+const float PROCESS_NOISE_PER_SECOND = 4000.0f; // mm^2 / s
 const float OUTLIER_THRESHOLD_MM = 150.0f;
 const float OUTLIER_REJECTION_GAIN = 6.0f;
 
@@ -54,6 +73,62 @@ void resetWindow();
 void resetFilterState();
 void beginSensorInterface();
 void triggerSensorPulse();
+
+void publishSensorHealth(SensorHealthState state, const char* reason){
+  if(!wsReadyForSamples){
+    lastHealthState = state;
+    if(reason){
+      strncpy(lastHealthReason, reason, sizeof(lastHealthReason)-1);
+      lastHealthReason[sizeof(lastHealthReason)-1] = '\0';
+    } else {
+      lastHealthReason[0] = '\0';
+    }
+    return;
+  }
+  uint32_t now = millis();
+  if(lastHealthState == state){
+    bool sameReason = false;
+    if((reason == nullptr || reason[0] == '\0') && lastHealthReason[0] == '\0'){
+      sameReason = true;
+    } else if(reason != nullptr){
+      sameReason = (strncmp(reason, lastHealthReason, sizeof(lastHealthReason)) == 0);
+    }
+    if(sameReason && (now - lastHealthReport_ms) < SENSOR_STATUS_THROTTLE_MS){
+      return;
+    }
+  }
+  DynamicJsonDocument d(256);
+  d["type"] = "sensor:status";
+  if(SENSOR_ID){ d["sensor_id"] = SENSOR_ID; }
+  const char* statusStr = "UNKNOWN";
+  switch(state){
+    case SENSOR_HEALTH_OK: statusStr = "OK"; break;
+    case SENSOR_HEALTH_WARNING: statusStr = "WARNING"; break;
+    case SENSOR_HEALTH_FAULT: statusStr = "FAULT"; break;
+    default: statusStr = "UNKNOWN"; break;
+  }
+  d["status"] = statusStr;
+  if(reason && reason[0]){
+    d["reason"] = reason;
+  }
+  d["rssi"] = WiFi.RSSI();
+  d["uptime_s"] = (millis() - boot_ms) / 1000;
+  wsSendJson(d);
+  lastHealthReport_ms = now;
+  lastHealthState = state;
+  if(reason){
+    strncpy(lastHealthReason, reason, sizeof(lastHealthReason)-1);
+    lastHealthReason[sizeof(lastHealthReason)-1] = '\0';
+  } else {
+    lastHealthReason[0] = '\0';
+  }
+}
+
+void sensorHealthOk(){
+  if(lastHealthState != SENSOR_HEALTH_OK || lastHealthReason[0] != '\0'){
+    publishSensorHealth(SENSOR_HEALTH_OK, "");
+  }
+}
 
 void ensureWiFi(){
   static uint8_t attempt = 0;
@@ -195,7 +270,7 @@ bool readSensor(float &mm){
   if((now - lastSensorTrigger_ms >= SENSOR_TRIGGER_INTERVAL_MS) && (US.available() < 4)){
     triggerSensorPulse();
   }
-  if(now - lastPoll_ms < 25 && US.available() == 0){
+  if(now - lastPoll_ms < SENSOR_POLL_MIN_INTERVAL_MS && US.available() == 0){
     return false;
   }
   lastPoll_ms = now;
@@ -204,6 +279,7 @@ bool readSensor(float &mm){
   if(got){
     lastSensorRead_ms = millis();
     sensorWarningPrinted = false;
+    sensorHealthOk();
     if(mm <= 0){
       sensorErrorCount++;
       if(sensorErrorCount % 10 == 0){
@@ -227,8 +303,16 @@ bool readSensor(float &mm){
   if(!sensorWarningPrinted && millis() - lastSensorRead_ms > sensorTimeout_ms){
     Serial.println("[US] No readings received from ultrasonic sensor");
     sensorWarningPrinted = true;
+    publishSensorHealth(SENSOR_HEALTH_WARNING, "timeout");
   }
-  if(sensorWarningPrinted && millis() - lastSensorRead_ms > sensorTimeout_ms * 2){
+  uint32_t since = millis() - lastSensorRead_ms;
+  if(since > SENSOR_WARNING_AFTER_MS && lastHealthState == SENSOR_HEALTH_OK){
+    publishSensorHealth(SENSOR_HEALTH_WARNING, "timeout");
+  }
+  if(since > SENSOR_FAULT_AFTER_MS){
+    publishSensorHealth(SENSOR_HEALTH_FAULT, "timeout");
+  }
+  if(sensorWarningPrinted && since > sensorTimeout_ms * 2){
     resetWindow();
     resetFilterState();
   }

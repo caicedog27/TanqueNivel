@@ -43,5 +43,5 @@ void loop(){
     }
     last_send_ms = millis();
   }
-  delay(5);
+  delay(2);
 }

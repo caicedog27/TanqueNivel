@@ -77,6 +77,9 @@ class SensorState(BaseModel):
     raw_mm: float = 0.0
     filtered_pct: float = 0.0
     last_ts: float = 0.0
+    status: str = "UNKNOWN"
+    status_reason: Optional[str] = None
+    last_status_ts: float = 0.0
 
 class AutoModel(BaseModel):
     ema_run_s: float = 0.0
@@ -135,6 +138,10 @@ def persist_auto_model():
 
 STATE = AppState()
 
+SENSOR_WARNING_AGE_S = 6.0
+SENSOR_FAULT_AGE_S = 12.0
+VALID_SENSOR_STATUS = {"OK", "WARNING", "FAULT", "UNKNOWN"}
+
 def load_auto_model_state():
     data = load_json(AUTO_MODEL_PATH, None)
     if not data:
@@ -163,6 +170,63 @@ AUTO_LEARN = {
     "source": "",
 }
 
+def sensor_state_by_id(sensor_id: Optional[str]) -> Optional[SensorState]:
+    sid = (sensor_id or "").lower()
+    if sid == "tank":
+        return STATE.tank
+    if sid == "hopper":
+        return STATE.hopper
+    return None
+
+def sensor_label(sensor_id: Optional[str]) -> str:
+    sid = (sensor_id or "").lower()
+    if sid == "tank":
+        return "tanque"
+    if sid == "hopper":
+        return "tolva"
+    return sensor_id or "sensor"
+
+async def force_pump_off(reason: str, log_msg: Optional[str] = None) -> bool:
+    if not STATE.actuator.pump_on:
+        return False
+    STATE.actuator.pump_on = False
+    STATE.actuator.last_command_ts = time.time()
+    auto_learn_pump_off(reason)
+    if STATE.actuator.board_id in BOARDS:
+        try:
+            await BOARDS[STATE.actuator.board_id].ws.send_json({"type": "actuator:pump", "value": "OFF"})
+        except Exception as e:
+            log_event(f"pump off send err {e}")
+    log_event(log_msg or f"Safety: bomba OFF ({reason})")
+    return True
+
+async def handle_sensor_status(sensor_id: Optional[str], status: Optional[str], reason: Optional[str], source: str) -> None:
+    sensor = sensor_state_by_id(sensor_id)
+    if not sensor:
+        return
+    normalized = (status or "UNKNOWN").upper()
+    if normalized not in VALID_SENSOR_STATUS:
+        normalized = "UNKNOWN"
+    reason_norm = reason if reason else None
+    prev_status = (sensor.status or "UNKNOWN").upper()
+    prev_reason = sensor.status_reason
+    changed = (prev_status != normalized) or (prev_reason != reason_norm)
+    sensor.status = normalized
+    sensor.status_reason = reason_norm
+    sensor.last_status_ts = time.time()
+    label = sensor_label(sensor_id)
+    if changed:
+        if normalized == "OK":
+            if prev_status in ("WARNING", "FAULT"):
+                log_event(f"Sensor {label} recuperado ({source})")
+        elif normalized == "WARNING":
+            log_event(f"Advertencia sensor {label}: {reason_norm or 'sin motivo'} ({source})")
+        elif normalized == "FAULT":
+            log_event(f"Falla sensor {label}: {reason_norm or 'sin motivo'} ({source})")
+        else:
+            log_event(f"Estado sensor {label}: {normalized} ({source})")
+    if normalized == "FAULT":
+        await force_pump_off(f"sensor_fault:{sensor_id}", f"Safety: bomba OFF por falla sensor {label}")
 def auto_learn_reset():
     AUTO_LEARN.update({
         "active": False,
@@ -515,8 +579,14 @@ async def ws_board(websocket:WebSocket, board_id:str):
                     STATE.tank.raw_mm=mm; STATE.tank.filtered_pct=pct_from_mm(mm, CFG.tank.cal); STATE.tank.last_ts=ts
                 elif sid=="hopper":
                     STATE.hopper.raw_mm=mm; STATE.hopper.filtered_pct=pct_from_mm(mm, CFG.hopper.cal); STATE.hopper.last_ts=ts
+                await handle_sensor_status(sid, "OK", None, "sample")
             elif t=="ack":
                 log_event(f"ACK {board_id} {data.get('cmd')}")
+            elif t=="sensor:status":
+                sid = data.get("sensor_id")
+                status = data.get("status")
+                reason = data.get("reason")
+                await handle_sensor_status(sid, status, reason, "ws")
             elif t=="actuator:stats":
                 STATE.actuator.pulses_total=int(data.get("pulses_total",STATE.actuator.pulses_total))
                 STATE.actuator.runtime_ms_total=int(data.get("runtime_ms_total",STATE.actuator.runtime_ms_total))
@@ -545,12 +615,7 @@ async def history_loop():
         await asyncio.sleep(2.0)
         # TTL safety
         if STATE.actuator.pump_on and STATE.actuator.ttl_ms>0 and (time.time()-STATE.actuator.last_command_ts)*1000 > STATE.actuator.ttl_ms:
-            STATE.actuator.pump_on=False
-            auto_learn_pump_off("ttl")
-            if STATE.actuator.board_id in BOARDS:
-                try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
-                except: pass
-            log_event("TTL cutoff pump OFF")
+            await force_pump_off("ttl", "TTL cutoff pump OFF")
         pulses_delta=max(0, STATE.actuator.pulses_total-last_p); runtime_delta=max(0, STATE.actuator.runtime_ms_total-last_r)
         last_p=STATE.actuator.pulses_total; last_r=STATE.actuator.runtime_ms_total
         item={"ts":time.time(),"pulses":float(pulses_delta),"runtime_s":float(runtime_delta)/1000.0,
@@ -561,10 +626,31 @@ async def history_loop():
         try:
             with open(HISTORY_PATH,"a",encoding="utf-8") as f: f.write(json.dumps(item)+"\n")
         except Exception as e: log_event(f"history write err {e}")
+        now_ts = time.time()
+        for sid in ("tank", "hopper"):
+            sensor = sensor_state_by_id(sid)
+            if not sensor or sensor.last_ts <= 0:
+                continue
+            age = now_ts - sensor.last_ts
+            if age > SENSOR_FAULT_AGE_S:
+                await handle_sensor_status(sid, "FAULT", "timeout", "watchdog")
+                continue
+            if age > SENSOR_WARNING_AGE_S:
+                await handle_sensor_status(sid, "WARNING", "timeout", "watchdog")
         # AUTO
         if STATE.mode=="AUTO":
             targ = CFG.hopper.cal.target_pct; hyst = CFG.hopper.cal.hysteresis_pct; guard = CFG.auto.anti_spill_margin_pct
-            tank_ok = True if not CFG.auto.use_tank_sensor else STATE.tank.filtered_pct > CFG.auto.tank_low_lock_pct
+            hopper_ready = STATE.hopper.status == "OK"
+            tank_ready = STATE.tank.status == "OK"
+            if not hopper_ready:
+                changed = await force_pump_off("sensor_fault:hopper", "AUTO: bomba OFF (sensor tolva sin datos)")
+                if changed:
+                    log_event("AUTO: control detenido por sensor tolva")
+                continue
+            tank_ok = True if not CFG.auto.use_tank_sensor else (tank_ready and STATE.tank.filtered_pct > CFG.auto.tank_low_lock_pct)
+            if CFG.auto.use_tank_sensor and not tank_ready:
+                await force_pump_off("sensor_fault:tank", "AUTO: bomba OFF (sensor tanque sin datos)")
+                tank_ok = False
             if tank_ok and STATE.hopper.filtered_pct < (targ - hyst):
                 if not STATE.actuator.pump_on:
                     STATE.actuator.pump_on=True; STATE.actuator.last_command_ts=time.time()
