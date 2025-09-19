@@ -319,6 +319,28 @@ const Alerts={
         this.filterAlerted=false;
       }
     }
+    const handleSensorStatus=(curr,prevStatus,label)=>{
+      const currStat=(curr?.status||'').toUpperCase();
+      const prevStat=(prevStatus?.status||'').toUpperCase();
+      const currReason=curr?.status_reason||'';
+      const prevReason=prevStatus?.status_reason||'';
+      if(currStat!==prevStat){
+        if(currStat==='FAULT'){
+          const msg=`Falla sensor ${label}${currReason?': '+currReason:''}`;
+          this.notify(msg,{alert:true,throttleMs:60000});
+        }else if(currStat==='WARNING'){
+          const msg=`Advertencia sensor ${label}${currReason?': '+currReason:''}`;
+          this.notify(msg,{alert:true,throttleMs:35000});
+        }else if(currStat==='OK' && (prevStat==='FAULT'||prevStat==='WARNING')){
+          this.notify(`Sensor ${label} recuperado`,{throttleMs:15000});
+        }
+      }else if(currStat==='WARNING' && currReason && currReason!==prevReason){
+        const msg=`Advertencia sensor ${label}${currReason?': '+currReason:''}`;
+        this.notify(msg,{alert:true,throttleMs:35000});
+      }
+    };
+    handleSensorStatus(state.tank, prev.tank, 'del tanque');
+    handleSensorStatus(state.hopper, prev.hopper, 'de la tolva');
     const target=((cfg?.hopper?.cal?.target_pct??65)+(cfg?.auto?.anti_spill_margin_pct??1.2));
     const hopperPct=state.hopper?.filtered_pct??0;
     const hopperPrev=prev.hopper?.filtered_pct??0;
