@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <math.h>
 #include <cstring>
+#include <stdlib.h>
 
 const char* FW_VERSION = "UX15";
 uint32_t boot_ms = 0;
@@ -27,9 +28,12 @@ HardwareSerial& US = Serial1;
 HardwareSerial& US = Serial2;
 #endif
 
-const uint32_t SENSOR_TRIGGER_INTERVAL_MS = 200;
+// According to the DYP-A01 timing diagram the sensor can provide a new sample
+// every ~100 ms. We trigger slightly slower to stay within the guaranteed
+// response window while keeping the reported level reactive.
+const uint32_t SENSOR_TRIGGER_INTERVAL_MS = 120;
 const uint32_t SENSOR_TRIGGER_PULSE_US = 2000;
-const uint32_t SENSOR_POLL_MIN_INTERVAL_MS = 15;
+const uint32_t SENSOR_POLL_MIN_INTERVAL_MS = 5;
 const uint32_t SENSOR_WARNING_AFTER_MS = 5000;
 const uint32_t SENSOR_FAULT_AFTER_MS = 10000;
 const uint32_t SENSOR_STATUS_THROTTLE_MS = 2500;
@@ -215,49 +219,75 @@ void triggerSensorPulse(){
 }
 
 bool readBinaryFrame(float &mm){
+  enum ParseState : uint8_t { WAIT_HEADER = 0, READ_HIGH, READ_LOW, READ_CHECKSUM };
+  static ParseState state = WAIT_HEADER;
+  static uint8_t highByte = 0;
+  static uint8_t lowByte = 0;
   static uint8_t desyncCounter = 0;
-  while(US.available() >= 4){
-    int b = US.read();
-    if(b != 0xFF){
-      desyncCounter++;
-      if(desyncCounter > 20){
-        flushSensorBuffer();
-        desyncCounter = 0;
-      }
-      continue;
-    }
-    desyncCounter = 0;
-    int H = US.read(), L = US.read(), S = US.read();
-    if( ((uint8_t)((0xFF + H + L) & 0xFF)) == (uint8_t)S ){
-      mm = (float)((H<<8) | L);
-      return true;
-    } else {
-      sensorErrorCount++;
-      if(sensorErrorCount % 8 == 0){
-        flushSensorBuffer();
+  while(US.available()){
+    uint8_t b = US.read();
+    switch(state){
+      case WAIT_HEADER:
+        if(b == 0xFF){
+          state = READ_HIGH;
+          desyncCounter = 0;
+        } else {
+          desyncCounter++;
+          if(desyncCounter > 20){
+            flushSensorBuffer();
+            desyncCounter = 0;
+          }
+        }
+        break;
+      case READ_HIGH:
+        highByte = b;
+        state = READ_LOW;
+        break;
+      case READ_LOW:
+        lowByte = b;
+        state = READ_CHECKSUM;
+        break;
+      case READ_CHECKSUM:{
+        uint8_t checksum = (uint8_t)((0xFF + highByte + lowByte) & 0xFF);
+        state = WAIT_HEADER;
+        if(checksum == b){
+          mm = (float)((highByte << 8) | lowByte);
+          return true;
+        }
+        sensorErrorCount++;
+        if(sensorErrorCount % 8 == 0){
+          flushSensorBuffer();
+        }
+        break;
       }
     }
   }
   return false;
 }
 bool readAsciiFrame(float &mm){
-  static String line;
+  static char buffer[16];
+  static uint8_t index = 0;
   while(US.available()){
     char c = US.read();
-    if(c=='\n'){
-      line.trim();
-      if(line.length()>0){
-        mm = line.toInt();
-        line="";
+    if(c == '\r'){
+      continue;
+    }
+    if(c == '\n'){
+      if(index > 0){
+        buffer[index] = '\0';
+        mm = (float)atoi(buffer);
+        index = 0;
         return true;
       }
-      line="";
+      index = 0;
+      continue;
     }
-    else if(isDigit(c)){
-      line += c;
-    } else if(c=='\r'){
+    if(isDigit(c)){
+      if(index < sizeof(buffer) - 1){
+        buffer[index++] = c;
+      }
     } else {
-      line="";
+      index = 0;
       sensorErrorCount++;
     }
   }
