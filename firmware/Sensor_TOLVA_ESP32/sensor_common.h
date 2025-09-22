@@ -273,9 +273,6 @@ bool readSensor(float &mm){
     sensorErrorCount = 0;
     return true;
   }
-  if(lastSensorRead_ms == 0){
-    lastSensorRead_ms = millis();
-  }
   if(!sensorWarningPrinted && millis() - lastSensorRead_ms > sensorTimeout_ms){
     Serial.println("[US] No readings received from ultrasonic sensor");
     sensorWarningPrinted = true;
@@ -318,12 +315,19 @@ float filteredValue(){
   }
   return filtered_mm;
 }
+bool sensorDataFresh(uint32_t maxAge_ms){
+  if(lastSensorRead_ms == 0){
+    return false;
+  }
+  return (millis() - lastSensorRead_ms) <= maxAge_ms;
+}
+
 void recoverSensorLink(){
   Serial.println("[US] Attempting to recover ultrasonic sensor link");
   US.end();
   delay(20);
   beginSensorInterface();
-  lastSensorRead_ms = millis();
+  lastSensorRead_ms = 0;
   sensorWarningPrinted = false;
   sensorErrorCount = 0;
 }
