@@ -267,36 +267,61 @@ bool readAsciiFrame(float &mm){
 bool readSensor(float &mm){
   static uint32_t lastPoll_ms = 0;
   uint32_t now = millis();
-  if((now - lastSensorTrigger_ms >= SENSOR_TRIGGER_INTERVAL_MS) && (US.available() < 4)){
+
+  if(now - lastSensorTrigger_ms >= SENSOR_TRIGGER_INTERVAL_MS){
     triggerSensorPulse();
   }
+
   if(now - lastPoll_ms < SENSOR_POLL_MIN_INTERVAL_MS && US.available() == 0){
     return false;
   }
   lastPoll_ms = now;
-  bool got = readBinaryFrame(mm);
-  if(!got) got = readAsciiFrame(mm);
-  if(got){
-    lastSensorRead_ms = millis();
-    sensorWarningPrinted = false;
-    sensorHealthOk();
-    if(mm <= 0){
+
+  bool anyFrame = false;
+  bool validFrame = false;
+  float latestValid = 0.0f;
+
+  while(true){
+    float candidate = 0.0f;
+    bool got = readBinaryFrame(candidate);
+    if(!got){
+      got = readAsciiFrame(candidate);
+    }
+    if(!got){
+      break;
+    }
+    anyFrame = true;
+    if(candidate <= 0){
       sensorErrorCount++;
       if(sensorErrorCount % 10 == 0){
         Serial.println("[US] Invalid reading received (<= 0 mm)");
       }
-      return false;
+      continue;
     }
-    if(mm > 6000){
+    if(candidate > 6000){
       sensorErrorCount++;
       if(sensorErrorCount % 10 == 0){
         Serial.println("[US] Invalid reading received (> 6000 mm)");
       }
-      return false;
+      continue;
     }
+    latestValid = candidate;
+    validFrame = true;
+  }
+
+  if(validFrame){
+    mm = latestValid;
+    lastSensorRead_ms = millis();
+    sensorWarningPrinted = false;
+    sensorHealthOk();
     sensorErrorCount = 0;
     return true;
   }
+
+  if(anyFrame){
+    return false;
+  }
+
   if(lastSensorRead_ms == 0){
     lastSensorRead_ms = millis();
   }
