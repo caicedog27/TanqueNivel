@@ -45,6 +45,10 @@ const int WN = 7; float windowVals[WN]; int wCount=0; float last_mm = 0;
 const char* wsBoardId = nullptr;
 const char* wsBoardName = nullptr;
 bool wsReadyForSamples = false;
+bool wsHelloAcked = false;
+bool wsHelloInFlight = false;
+uint32_t wsHelloSent_ms = 0;
+uint32_t wsHelloLog_ms = 0;
 
 enum SensorHealthState : uint8_t {
   SENSOR_HEALTH_OK = 0,
@@ -78,6 +82,7 @@ void resetFilterState();
 void beginSensorInterface();
 void triggerSensorPulse();
 void wsSendJson(DynamicJsonDocument &doc);
+void monitorWsHandshake();
 
 void publishSensorHealth(SensorHealthState state, const char* reason){
   if(!wsReadyForSamples){
@@ -158,44 +163,145 @@ void ensureWiFi(){
   }
   if(status == WL_CONNECTED){
     IPAddress ip = WiFi.localIP();
-    Serial.printf("[WiFi] Connected. IP: %s, RSSI: %d\n", ip.toString().c_str(), WiFi.RSSI());
+    Serial.printf("[WiFi] Connected. IP: %s, RSSI: %d dBm, channel: %d\n", ip.toString().c_str(), WiFi.RSSI(), WiFi.channel());
+    Serial.printf("[WiFi] Gateway: %s, DNS: %s\n", WiFi.gatewayIP().toString().c_str(), WiFi.dnsIP().toString().c_str());
     attempt = 0;
   } else {
-    Serial.println("[WiFi] Failed to connect within timeout, retrying...");
+    Serial.printf("[WiFi] Failed to connect within timeout (status=%d, RSSI=%d)\n", (int)status, WiFi.RSSI());
+    Serial.println("[WiFi] Retrying after backoff...");
     WiFi.disconnect(true);
   }
 }
 void wsSendJson(DynamicJsonDocument &doc){ String out; serializeJson(doc, out); ws.sendTXT(out); }
-void hello(const char* id, const char* name){ DynamicJsonDocument d(256); d["type"]="hello"; d["id"]=id; d["kind"]="SENSOR"; d["name"]=name; d["token"]=BOARD_TOKEN; d["fw"]=FW_VERSION; d["mac"]=WiFi.macAddress(); d["rssi"]=WiFi.RSSI(); d["uptime_s"]=(millis()-boot_ms)/1000; wsSendJson(d); }
+void hello(const char* id, const char* name){
+  DynamicJsonDocument d(256);
+  d["type"] = "hello";
+  d["id"] = id;
+  d["kind"] = "SENSOR";
+  d["name"] = name;
+  d["token"] = BOARD_TOKEN;
+  d["fw"] = FW_VERSION;
+  d["mac"] = WiFi.macAddress();
+  d["rssi"] = WiFi.RSSI();
+  d["uptime_s"] = (millis() - boot_ms) / 1000;
+  wsSendJson(d);
+  wsHelloAcked = false;
+  wsReadyForSamples = false;
+  wsHelloInFlight = true;
+  wsHelloSent_ms = millis();
+  wsHelloLog_ms = wsHelloSent_ms;
+  Serial.printf("[WS] Hello sent (id=%s, name=%s, fw=%s, RSSI=%d)\n", id, name ? name : "?", FW_VERSION, WiFi.RSSI());
+}
 void sendSample(const char* sensor, float mm){ if(!wsReadyForSamples){ return; } DynamicJsonDocument d(256); d["type"]="sensor"; d["sensor_id"]=sensor; d["mm"]=mm; d["rssi"]=WiFi.RSSI(); d["uptime_s"]=(millis()-boot_ms)/1000; wsSendJson(d); }
+
+void handleWsText(uint8_t * payload, size_t length){
+  if(payload == nullptr || length == 0){
+    Serial.println("[WS] Empty text frame received");
+    return;
+  }
+  StaticJsonDocument<512> doc;
+  DeserializationError err = deserializeJson(doc, payload, length);
+  if(err){
+    Serial.printf("[WS] Message (raw): %.*s\n", (int)length, (const char*)payload);
+    Serial.printf("[WS] JSON parse error: %s\n", err.c_str());
+    return;
+  }
+  const char* type = doc["type"] | "";
+  if(strcmp(type, "hello:ack") == 0){
+    wsHelloAcked = true;
+    wsReadyForSamples = true;
+    wsHelloInFlight = false;
+    const char* status = doc["status"] | "ok";
+    const char* message = doc["message"] | "";
+    const char* server = doc["server"] | "server";
+    Serial.printf("[WS] Hello acknowledged (status=%s) by %s\n", status, server);
+    if(message && message[0]){
+      Serial.printf("[WS] Server message: %s\n", message);
+    }
+  } else if(strcmp(type, "error") == 0){
+    const char* reason = doc["reason"] | "unknown";
+    int code = doc["code"].is<int>() ? doc["code"].as<int>() : -1;
+    if(code >= 0){
+      Serial.printf("[WS] Server error (code %d): %s\n", code, reason);
+    } else {
+      Serial.printf("[WS] Server error: %s\n", reason);
+    }
+  } else {
+    Serial.printf("[WS] Message: %.*s\n", (int)length, (const char*)payload);
+  }
+}
+
+void logWsDisconnection(uint8_t * payload, size_t length){
+  uint16_t code = 0;
+  String reason;
+  if(payload != nullptr && length >= 2){
+    code = (uint16_t)(((uint16_t)payload[0] << 8) | payload[1]);
+    if(length > 2){
+      reason.reserve(length - 2);
+      for(size_t i = 2; i < length; ++i){
+        char c = (char)payload[i];
+        if(c >= 32 && c <= 126){
+          reason += c;
+        }
+      }
+    }
+  }
+  if(code > 0){
+    if(reason.length() > 0){
+      Serial.printf("[WS] Disconnected from server (code %u, reason=%s)\n", code, reason.c_str());
+    } else {
+      Serial.printf("[WS] Disconnected from server (code %u)\n", code);
+    }
+  } else {
+    Serial.println("[WS] Disconnected from server");
+  }
+}
+
 void onWsEvent(WStype_t type, uint8_t * payload, size_t length){
   switch(type){
     case WStype_CONNECTED:
-      Serial.println("[WS] Connected to server");
+      Serial.printf("[WS] Connected to %s:%u\n", WS_HOST, WS_PORT);
       wsReadyForSamples = false;
+      wsHelloAcked = false;
+      wsHelloInFlight = false;
       if(wsBoardId != nullptr && wsBoardName != nullptr){
         hello(wsBoardId, wsBoardName);
-        wsReadyForSamples = true;
       } else {
         Serial.println("[WS] Board identity not set, cannot send hello");
       }
       break;
     case WStype_DISCONNECTED:
-      Serial.println("[WS] Disconnected from server");
+      logWsDisconnection(payload, length);
+      if(wsHelloInFlight && !wsHelloAcked){
+        Serial.println("[WS] Handshake failed before ACK was received");
+      }
       wsReadyForSamples = false;
+      wsHelloAcked = false;
+      wsHelloInFlight = false;
       break;
     case WStype_ERROR:
       Serial.println("[WS] Error event received");
+      if(payload && length > 0){
+        Serial.printf("[WS] Error payload: %.*s\n", (int)length, (const char*)payload);
+      }
       wsReadyForSamples = false;
+      wsHelloAcked = false;
+      wsHelloInFlight = false;
       break;
     case WStype_TEXT:
-      Serial.printf("[WS] Message: %.*s\n", (int)length, (const char*)payload);
+      handleWsText(payload, length);
       break;
+    case WStype_PONG:
+    case WStype_PING:
+    case WStype_FRAGMENT_TEXT_START:
+    case WStype_FRAGMENT_BIN_START:
+    case WStype_FRAGMENT:
+    case WStype_FRAGMENT_FIN:
     default:
       break;
   }
 }
-void wsConnect(const char* id, const char* name){ wsBoardId = id; wsBoardName = name; wsReadyForSamples = false; String path=String("/ws/board/")+id+"?token="+BOARD_TOKEN; ws.begin(WS_HOST, WS_PORT, path.c_str()); ws.onEvent(onWsEvent); ws.setReconnectInterval(2000);
+void wsConnect(const char* id, const char* name){ wsBoardId = id; wsBoardName = name; wsReadyForSamples = false; wsHelloAcked = false; wsHelloInFlight = false; String path=String("/ws/board/")+id+"?token="+BOARD_TOKEN; ws.begin(WS_HOST, WS_PORT, path.c_str()); ws.onEvent(onWsEvent); ws.setReconnectInterval(2000);
   ws.enableHeartbeat(15000, 3000, 2); }
 
 uint32_t lastSensorRead_ms = 0;
@@ -501,4 +607,23 @@ void recoverSensorLink(){
   lastSensorRead_ms = 0;
   sensorWarningPrinted = false;
   sensorErrorCount = 0;
+}
+
+void monitorWsHandshake(){
+  if(!wsHelloInFlight){
+    return;
+  }
+  uint32_t now = millis();
+  uint32_t elapsed = now - wsHelloSent_ms;
+  if(now - wsHelloLog_ms > 3000){
+    Serial.printf("[WS] Waiting for hello ACK... (%lu ms elapsed, WiFi RSSI=%d, status=%d)\n",
+                  (unsigned long)elapsed, WiFi.RSSI(), (int)WiFi.status());
+    wsHelloLog_ms = now;
+  }
+  if(elapsed > 20000){
+    Serial.println("[WS] Hello ACK not received after 20s; will rely on reconnect logic");
+    wsHelloInFlight = false;
+    wsHelloAcked = false;
+    wsReadyForSamples = false;
+  }
 }
