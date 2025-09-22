@@ -352,9 +352,6 @@ bool readSensor(float &mm){
     return false;
   }
 
-  if(lastSensorRead_ms == 0){
-    lastSensorRead_ms = millis();
-  }
   if(!sensorWarningPrinted && millis() - lastSensorRead_ms > sensorTimeout_ms){
     Serial.println("[US] No readings received from ultrasonic sensor");
     sensorWarningPrinted = true;
@@ -372,6 +369,13 @@ bool readSensor(float &mm){
     resetFilterState();
   }
   return false;
+}
+
+bool sensorDataFresh(uint32_t maxAge_ms){
+  if(lastSensorRead_ms == 0){
+    return false;
+  }
+  return (millis() - lastSensorRead_ms) <= maxAge_ms;
 }
 
 struct WindowStats{
@@ -490,7 +494,7 @@ void recoverSensorLink(){
   beginSensorInterface();
   resetWindow();
   resetFilterState();
-  lastSensorRead_ms = millis();
+  lastSensorRead_ms = 0;
   sensorWarningPrinted = false;
   sensorErrorCount = 0;
 }
