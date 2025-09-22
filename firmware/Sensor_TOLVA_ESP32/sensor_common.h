@@ -3,7 +3,9 @@
 #include <WiFi.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
+#include <math.h>
 #include <cstring>
+#include <stdlib.h>
 
 const char* FW_VERSION = "UX15";
 uint32_t boot_ms = 0;
@@ -26,9 +28,12 @@ HardwareSerial& US = Serial1;
 HardwareSerial& US = Serial2;
 #endif
 
-const uint32_t SENSOR_TRIGGER_INTERVAL_MS = 200;
+// The DYP-A01 is able to deliver a new sample roughly every 100 ms. We stay a
+// little slower to give the transducer time to settle and to prevent the UART
+// FIFO from filling up when the network stack is busy.
+const uint32_t SENSOR_TRIGGER_INTERVAL_MS = 140;
 const uint32_t SENSOR_TRIGGER_PULSE_US = 2000;
-const uint32_t SENSOR_POLL_MIN_INTERVAL_MS = 15;
+const uint32_t SENSOR_POLL_MIN_INTERVAL_MS = 5;
 const uint32_t SENSOR_WARNING_AFTER_MS = 5000;
 const uint32_t SENSOR_FAULT_AFTER_MS = 10000;
 const uint32_t SENSOR_STATUS_THROTTLE_MS = 2500;
@@ -51,6 +56,84 @@ enum SensorHealthState : uint8_t {
 SensorHealthState lastHealthState = SENSOR_HEALTH_UNKNOWN;
 char lastHealthReason[32] = "";
 uint32_t lastHealthReport_ms = 0;
+
+// --- Advanced filtering configuration ---
+const float MIN_LEVEL_MM = 50.0f;
+const float MAX_LEVEL_MM = 4500.0f;
+const float MAX_STEP_MM = 200.0f;
+const float MIN_MEASUREMENT_VAR = 25.0f;        // (5 mm)^2
+const float MAX_MEASUREMENT_VAR = 250000.0f;    // (500 mm)^2
+const float PROCESS_NOISE_PER_SECOND = 3000.0f; // mm^2 / s
+const float OUTLIER_THRESHOLD_MM = 150.0f;
+const float OUTLIER_REJECTION_GAIN = 6.0f;
+
+uint32_t lastFilterUpdate_ms = 0;
+bool filterInitialized = false;
+float filtered_mm = 0;
+float kalmanError = 0;
+
+void flushSensorBuffer();
+void resetWindow();
+void resetFilterState();
+void beginSensorInterface();
+void triggerSensorPulse();
+void wsSendJson(DynamicJsonDocument &doc);
+
+void publishSensorHealth(SensorHealthState state, const char* reason){
+  if(!wsReadyForSamples){
+    lastHealthState = state;
+    if(reason){
+      strncpy(lastHealthReason, reason, sizeof(lastHealthReason)-1);
+      lastHealthReason[sizeof(lastHealthReason)-1] = '\0';
+    } else {
+      lastHealthReason[0] = '\0';
+    }
+    return;
+  }
+  uint32_t now = millis();
+  if(lastHealthState == state){
+    bool sameReason = false;
+    if((reason == nullptr || reason[0] == '\0') && lastHealthReason[0] == '\0'){
+      sameReason = true;
+    } else if(reason != nullptr){
+      sameReason = (strncmp(reason, lastHealthReason, sizeof(lastHealthReason)) == 0);
+    }
+    if(sameReason && (now - lastHealthReport_ms) < SENSOR_STATUS_THROTTLE_MS){
+      return;
+    }
+  }
+  DynamicJsonDocument d(256);
+  d["type"] = "sensor:status";
+  if(SENSOR_ID){ d["sensor_id"] = SENSOR_ID; }
+  const char* statusStr = "UNKNOWN";
+  switch(state){
+    case SENSOR_HEALTH_OK: statusStr = "OK"; break;
+    case SENSOR_HEALTH_WARNING: statusStr = "WARNING"; break;
+    case SENSOR_HEALTH_FAULT: statusStr = "FAULT"; break;
+    default: statusStr = "UNKNOWN"; break;
+  }
+  d["status"] = statusStr;
+  if(reason && reason[0]){
+    d["reason"] = reason;
+  }
+  d["rssi"] = WiFi.RSSI();
+  d["uptime_s"] = (millis() - boot_ms) / 1000;
+  wsSendJson(d);
+  lastHealthReport_ms = now;
+  lastHealthState = state;
+  if(reason){
+    strncpy(lastHealthReason, reason, sizeof(lastHealthReason)-1);
+    lastHealthReason[sizeof(lastHealthReason)-1] = '\0';
+  } else {
+    lastHealthReason[0] = '\0';
+  }
+}
+
+void sensorHealthOk(){
+  if(lastHealthState != SENSOR_HEALTH_OK || lastHealthReason[0] != '\0'){
+    publishSensorHealth(SENSOR_HEALTH_OK, "");
+  }
+}
 
 void ensureWiFi(){
   static uint8_t attempt = 0;
@@ -117,75 +200,9 @@ void wsConnect(const char* id, const char* name){ wsBoardId = id; wsBoardName = 
 
 uint32_t lastSensorRead_ms = 0;
 uint32_t lastSensorTrigger_ms = 0;
-uint32_t sensorTimeout_ms = 2000;
+uint32_t sensorTimeout_ms = 2500;
 uint16_t sensorErrorCount = 0;
 bool sensorWarningPrinted = false;
-
-void flushSensorBuffer();
-void beginSensorInterface();
-void triggerSensorPulse();
-
-void publishSensorHealth(SensorHealthState state, const char* reason){
-  if(!wsReadyForSamples){
-    lastHealthState = state;
-    if(reason){
-      strncpy(lastHealthReason, reason, sizeof(lastHealthReason)-1);
-      lastHealthReason[sizeof(lastHealthReason)-1] = '\0';
-    } else {
-      lastHealthReason[0] = '\0';
-    }
-    return;
-  }
-  uint32_t now = millis();
-  if(lastHealthState == state){
-    bool sameReason = false;
-    if((reason == nullptr || reason[0] == '\0') && lastHealthReason[0] == '\0'){
-      sameReason = true;
-    } else if(reason != nullptr){
-      sameReason = (strncmp(reason, lastHealthReason, sizeof(lastHealthReason)) == 0);
-    }
-    if(sameReason && (now - lastHealthReport_ms) < SENSOR_STATUS_THROTTLE_MS){
-      return;
-    }
-  }
-  DynamicJsonDocument d(256);
-  d["type"] = "sensor:status";
-  if(SENSOR_ID){ d["sensor_id"] = SENSOR_ID; }
-  const char* statusStr = "UNKNOWN";
-  switch(state){
-    case SENSOR_HEALTH_OK: statusStr = "OK"; break;
-    case SENSOR_HEALTH_WARNING: statusStr = "WARNING"; break;
-    case SENSOR_HEALTH_FAULT: statusStr = "FAULT"; break;
-    default: statusStr = "UNKNOWN"; break;
-  }
-  d["status"] = statusStr;
-  if(reason && reason[0]){
-    d["reason"] = reason;
-  }
-  d["rssi"] = WiFi.RSSI();
-  d["uptime_s"] = (millis() - boot_ms) / 1000;
-  wsSendJson(d);
-  lastHealthReport_ms = now;
-  lastHealthState = state;
-  if(reason){
-    strncpy(lastHealthReason, reason, sizeof(lastHealthReason)-1);
-    lastHealthReason[sizeof(lastHealthReason)-1] = '\0';
-  } else {
-    lastHealthReason[0] = '\0';
-  }
-}
-
-void sensorHealthOk(){
-  if(lastHealthState != SENSOR_HEALTH_OK || lastHealthReason[0] != '\0'){
-    publishSensorHealth(SENSOR_HEALTH_OK, "");
-  }
-}
-
-void flushSensorBuffer(){
-  while(US.available()){
-    US.read();
-  }
-}
 
 void beginSensorInterface(){
   pinMode(SENSOR_TRIGGER_PIN, OUTPUT);
@@ -203,37 +220,75 @@ void triggerSensorPulse(){
 }
 
 bool readBinaryFrame(float &mm){
-  while(US.available() >= 4){
-    int b = US.read();
-    if(b != 0xFF) continue;
-    int H = US.read(), L = US.read(), S = US.read();
-    if( ((uint8_t)((0xFF + H + L) & 0xFF)) == (uint8_t)S ){
-      mm = (float)((H<<8) | L);
-      return true;
-    } else {
-      sensorErrorCount++;
+  enum ParseState : uint8_t { WAIT_HEADER = 0, READ_HIGH, READ_LOW, READ_CHECKSUM };
+  static ParseState state = WAIT_HEADER;
+  static uint8_t highByte = 0;
+  static uint8_t lowByte = 0;
+  static uint8_t desyncCounter = 0;
+  while(US.available()){
+    uint8_t b = US.read();
+    switch(state){
+      case WAIT_HEADER:
+        if(b == 0xFF){
+          state = READ_HIGH;
+          desyncCounter = 0;
+        } else {
+          desyncCounter++;
+          if(desyncCounter > 20){
+            flushSensorBuffer();
+            desyncCounter = 0;
+          }
+        }
+        break;
+      case READ_HIGH:
+        highByte = b;
+        state = READ_LOW;
+        break;
+      case READ_LOW:
+        lowByte = b;
+        state = READ_CHECKSUM;
+        break;
+      case READ_CHECKSUM:{
+        uint8_t checksum = (uint8_t)((0xFF + highByte + lowByte) & 0xFF);
+        state = WAIT_HEADER;
+        if(checksum == b){
+          mm = (float)((highByte << 8) | lowByte);
+          return true;
+        }
+        sensorErrorCount++;
+        if(sensorErrorCount % 8 == 0){
+          flushSensorBuffer();
+        }
+        break;
+      }
     }
   }
   return false;
 }
 bool readAsciiFrame(float &mm){
-  static String line;
+  static char buffer[16];
+  static uint8_t index = 0;
   while(US.available()){
     char c = US.read();
-    if(c=='\n'){
-      line.trim();
-      if(line.length()>0){
-        mm = line.toInt();
-        line="";
+    if(c == '\r'){
+      continue;
+    }
+    if(c == '\n'){
+      if(index > 0){
+        buffer[index] = '\0';
+        mm = (float)atoi(buffer);
+        index = 0;
         return true;
       }
-      line="";
+      index = 0;
+      continue;
     }
-    else if(isDigit(c)){
-      line += c;
-    } else if(c=='\r'){
+    if(isDigit(c)){
+      if(index < sizeof(buffer) - 1){
+        buffer[index++] = c;
+      }
     } else {
-      line="";
+      index = 0;
       sensorErrorCount++;
     }
   }
@@ -243,36 +298,64 @@ bool readAsciiFrame(float &mm){
 bool readSensor(float &mm){
   static uint32_t lastPoll_ms = 0;
   uint32_t now = millis();
-  if((now - lastSensorTrigger_ms >= SENSOR_TRIGGER_INTERVAL_MS) && (US.available() < 4)){
+
+  if(now - lastSensorTrigger_ms >= SENSOR_TRIGGER_INTERVAL_MS){
     triggerSensorPulse();
   }
+
   if(now - lastPoll_ms < SENSOR_POLL_MIN_INTERVAL_MS && US.available() == 0){
     return false;
   }
   lastPoll_ms = now;
-  bool got = readBinaryFrame(mm);
-  if(!got) got = readAsciiFrame(mm);
-  if(got){
-    lastSensorRead_ms = millis();
-    sensorWarningPrinted = false;
-    sensorHealthOk();
-    if(mm <= 0){
+
+  bool anyFrame = false;
+  bool validFrame = false;
+  float latestValid = 0.0f;
+
+  while(true){
+    float candidate = 0.0f;
+    bool got = readBinaryFrame(candidate);
+    if(!got){
+      got = readAsciiFrame(candidate);
+    }
+    if(!got){
+      break;
+    }
+    anyFrame = true;
+    if(candidate <= 0){
       sensorErrorCount++;
       if(sensorErrorCount % 10 == 0){
         Serial.println("[US] Invalid reading received (<= 0 mm)");
       }
-      return false;
+      continue;
     }
-    if(mm > 6000){
+    if(candidate > 6000){
       sensorErrorCount++;
       if(sensorErrorCount % 10 == 0){
         Serial.println("[US] Invalid reading received (> 6000 mm)");
       }
-      return false;
+      continue;
     }
+    latestValid = candidate;
+    validFrame = true;
+  }
+
+  if(validFrame){
+    mm = latestValid;
+    lastSensorRead_ms = millis();
+    sensorWarningPrinted = false;
+    sensorHealthOk();
     sensorErrorCount = 0;
     return true;
   }
+
+  if(anyFrame){
+    // Frames were received but filtered out as invalid. Keep the timeout watchdog
+    // satisfied so we do not unnecessarily tear down the serial link.
+    lastSensorRead_ms = millis();
+    return false;
+  }
+
   if(!sensorWarningPrinted && millis() - lastSensorRead_ms > sensorTimeout_ms){
     Serial.println("[US] No readings received from ultrasonic sensor");
     sensorWarningPrinted = true;
@@ -285,36 +368,13 @@ bool readSensor(float &mm){
   if(since > SENSOR_FAULT_AFTER_MS){
     publishSensorHealth(SENSOR_HEALTH_FAULT, "timeout");
   }
+  if(sensorWarningPrinted && since > sensorTimeout_ms * 2){
+    resetWindow();
+    resetFilterState();
+  }
   return false;
 }
 
-float trimmedMean(){
-  if(wCount==0) return last_mm;
-  float buf[WN]; int n = wCount<WN?wCount:WN;
-  for(int i=0;i<n;i++) buf[i]=windowVals[i];
-  for(int i=0;i<n;i++) for(int j=i+1;j<n;j++) if(buf[j]<buf[i]){ float t=buf[i]; buf[i]=buf[j]; buf[j]=t; }
-  int cut = (n>=5)?1:0; int a=cut, b=n-cut; if(a>=b){ a=0; b=n; }
-  float sum=0; int cnt=0; for(int i=a;i<b;i++){ sum+=buf[i]; cnt++; } return (cnt>0)?(sum/cnt):last_mm;
-}
-void pushVal(float mm){
-  if(last_mm>0){ float delta = mm - last_mm; if(delta > 200) mm = last_mm + 200; else if(delta < -200) mm = last_mm - 200; }
-  if(mm < 50) mm = 50; if(mm > 4500) mm = 4500; last_mm = mm;
-  if(wCount < WN){ windowVals[wCount++] = mm; }
-  else{ for(int i=1;i<WN;i++) windowVals[i-1] = windowVals[i]; windowVals[WN-1] = mm; }
-}
-bool filterInitialized = false;
-float filtered_mm = 0;
-float filteredValue(){
-  float tm = trimmedMean();
-  if(!filterInitialized){
-    filtered_mm = tm;
-    filterInitialized = true;
-  } else {
-    const float alpha = 0.4f;
-    filtered_mm = alpha * tm + (1.0f - alpha) * filtered_mm;
-  }
-  return filtered_mm;
-}
 bool sensorDataFresh(uint32_t maxAge_ms){
   if(lastSensorRead_ms == 0){
     return false;
@@ -322,11 +382,122 @@ bool sensorDataFresh(uint32_t maxAge_ms){
   return (millis() - lastSensorRead_ms) <= maxAge_ms;
 }
 
+struct WindowStats{
+  float mean;
+  float variance;
+  int count;
+};
+
+WindowStats computeWindowStats(){
+  WindowStats stats{last_mm, 0.0f, 0};
+  if(wCount == 0) return stats;
+  int n = (wCount < WN) ? wCount : WN;
+  float buf[WN];
+  for(int i=0;i<n;i++) buf[i] = windowVals[i];
+  for(int i=1;i<n;i++){
+    float key = buf[i];
+    int j = i - 1;
+    while(j >= 0 && buf[j] > key){
+      buf[j + 1] = buf[j];
+      j--;
+    }
+    buf[j + 1] = key;
+  }
+  int trim = (n >= 5) ? 1 : 0;
+  int start = trim;
+  int end = n - trim;
+  if(start >= end){
+    start = 0;
+    end = n;
+  }
+  float sum = 0.0f;
+  int count = 0;
+  for(int i=start;i<end;i++){
+    sum += buf[i];
+    count++;
+  }
+  float mean = (count > 0) ? (sum / count) : last_mm;
+  float variance = 0.0f;
+  if(count > 1){
+    for(int i=start;i<end;i++){
+      float diff = buf[i] - mean;
+      variance += diff * diff;
+    }
+    variance /= (count - 1);
+  }
+  stats.mean = mean;
+  stats.variance = variance;
+  stats.count = count;
+  return stats;
+}
+
+void resetFilterState(){
+  filterInitialized = false;
+  filtered_mm = 0.0f;
+  kalmanError = 0.0f;
+  lastFilterUpdate_ms = millis();
+}
+
+void resetWindow(){
+  wCount = 0;
+  last_mm = 0.0f;
+}
+
+void pushVal(float mm){
+  if(last_mm > 0){
+    float delta = mm - last_mm;
+    if(delta > MAX_STEP_MM) mm = last_mm + MAX_STEP_MM;
+    else if(delta < -MAX_STEP_MM) mm = last_mm - MAX_STEP_MM;
+  }
+  if(mm < MIN_LEVEL_MM) mm = MIN_LEVEL_MM;
+  if(mm > MAX_LEVEL_MM) mm = MAX_LEVEL_MM;
+  last_mm = mm;
+  if(wCount < WN){
+    windowVals[wCount++] = mm;
+  } else {
+    for(int i=1;i<WN;i++) windowVals[i-1] = windowVals[i];
+    windowVals[WN-1] = mm;
+  }
+}
+
+float filteredValue(){
+  WindowStats stats = computeWindowStats();
+  uint32_t now = millis();
+  float dt = (lastFilterUpdate_ms == 0) ? 0.0f : (now - lastFilterUpdate_ms) * 0.001f;
+  if(dt <= 0.0f) dt = 0.001f;
+  if(!filterInitialized){
+    filtered_mm = stats.mean;
+    kalmanError = (stats.variance > MIN_MEASUREMENT_VAR) ? stats.variance : MIN_MEASUREMENT_VAR;
+    filterInitialized = true;
+  } else {
+    kalmanError += PROCESS_NOISE_PER_SECOND * dt;
+    float measurementVar = stats.variance;
+    if(measurementVar < MIN_MEASUREMENT_VAR) measurementVar = MIN_MEASUREMENT_VAR;
+    if(measurementVar > MAX_MEASUREMENT_VAR) measurementVar = MAX_MEASUREMENT_VAR;
+    if(fabsf(stats.mean - filtered_mm) > OUTLIER_THRESHOLD_MM){
+      measurementVar *= OUTLIER_REJECTION_GAIN;
+    }
+    float gain = kalmanError / (kalmanError + measurementVar);
+    filtered_mm = filtered_mm + gain * (stats.mean - filtered_mm);
+    kalmanError = (1.0f - gain) * kalmanError;
+  }
+  lastFilterUpdate_ms = now;
+  return filtered_mm;
+}
+
+void flushSensorBuffer(){
+  while(US.available()){
+    US.read();
+  }
+}
+
 void recoverSensorLink(){
   Serial.println("[US] Attempting to recover ultrasonic sensor link");
   US.end();
   delay(20);
   beginSensorInterface();
+  resetWindow();
+  resetFilterState();
   lastSensorRead_ms = 0;
   sensorWarningPrinted = false;
   sensorErrorCount = 0;
