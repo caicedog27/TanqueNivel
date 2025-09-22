@@ -14,6 +14,7 @@ void setup(){
 void loop(){
   ws.loop();
   ensureWiFi();
+  monitorWsHandshake();
   if(sensorWarningPrinted && millis() - lastSensorRead_ms > sensorTimeout_ms * 3){
     recoverSensorLink();
   }

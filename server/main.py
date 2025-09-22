@@ -110,6 +110,11 @@ class BoardsView(BaseModel):
     uptime_s: Optional[int] = None
     ws_url: Optional[str] = None
     token: Optional[str] = None
+    awaiting_connection: bool = False
+    last_error: Optional[str] = None
+    last_error_detail: Optional[str] = None
+    last_error_ts: Optional[float] = None
+    last_error_ip: Optional[str] = None
 
 class AppState(BaseModel):
     mode: str = "MANUAL_OFF"
@@ -339,6 +344,7 @@ async def boards_register(req: BoardsRegisterReq, _:bool=Depends(require_api_key
     if req.kind: meta["kind"] = req.kind
     cache[req.board_id] = meta
     save_json(BOARDS_CACHE_PATH, cache)
+    BOARD_FAILURES.pop(req.board_id, None)
     log_event(f"board registered {req.board_id}")
     return {"ok": True}
 
@@ -350,6 +356,7 @@ async def boards_delete(board_id: str, _:bool=Depends(require_api_key)):
     cache = load_json(BOARDS_CACHE_PATH, {})
     cache.pop(board_id, None)
     save_json(BOARDS_CACHE_PATH, cache)
+    BOARD_FAILURES.pop(board_id, None)
     log_event(f"board deleted {board_id}")
     return {"ok": True}
 
@@ -363,7 +370,7 @@ async def api_boards(_:bool=Depends(require_api_key)):
     ws_host = m.group(1) if m else "192.168.1.68:8000"
     scheme_host = f"ws://{ws_host}"
     out = []
-    # expected
+    seen:set[str] = set()
     for bid, token in sorted(CFG.net.board_tokens.items()):
         meta = cache.get(bid, {})
         online = bid in BOARDS
@@ -376,17 +383,67 @@ async def api_boards(_:bool=Depends(require_api_key)):
         fw = conn.fw if conn else meta.get("fw")
         mac = conn.mac if conn else meta.get("mac")
         uptime_s = conn.uptime_s if conn else meta.get("uptime_s")
+        failure = BOARD_FAILURES.get(bid)
         out.append(BoardsView(board_id=bid, name=name, kind=kind, online=online,
                               last_ip=last_ip, last_seen=last_seen, rssi=rssi,
                               fw=fw, mac=mac, uptime_s=uptime_s,
-                              ws_url=f"{scheme_host}/ws/board/{bid}?token={token}", token=token).model_dump())
-    # plus online but not expected
-    for bid, c in BOARDS.items():
-        if bid not in CFG.net.board_tokens:
-            out.append(BoardsView(board_id=bid, name=c.name, kind=c.kind, online=True,
-                                  last_ip=c.ip, last_seen=c.last_seen, rssi=c.rssi,
-                                  fw=c.fw, mac=c.mac, uptime_s=c.uptime_s,
-                                  ws_url=f"{scheme_host}/ws/board/{bid}?token=<unknown>", token=None).model_dump())
+                              ws_url=f"{scheme_host}/ws/board/{bid}?token={token}", token=token,
+                              awaiting_connection=not online,
+                              last_error=(failure or {}).get("reason"),
+                              last_error_detail=(failure or {}).get("detail"),
+                              last_error_ts=(failure or {}).get("ts"),
+                              last_error_ip=(failure or {}).get("ip")).model_dump())
+        seen.add(bid)
+    for bid, meta in cache.items():
+        if bid in seen:
+            continue
+        online = bid in BOARDS
+        name = meta.get("name", bid)
+        kind = meta.get("kind", "UNKNOWN")
+        conn = BOARDS.get(bid)
+        last_ip = conn.ip if conn else meta.get("ip")
+        last_seen = conn.last_seen if conn else meta.get("last_seen")
+        rssi = conn.rssi if conn else meta.get("rssi")
+        fw = conn.fw if conn else meta.get("fw")
+        mac = conn.mac if conn else meta.get("mac")
+        uptime_s = conn.uptime_s if conn else meta.get("uptime_s")
+        failure = BOARD_FAILURES.get(bid)
+        out.append(BoardsView(board_id=bid, name=name, kind=kind, online=online,
+                              last_ip=last_ip, last_seen=last_seen, rssi=rssi,
+                              fw=fw, mac=mac, uptime_s=uptime_s,
+                              ws_url=f"{scheme_host}/ws/board/{bid}", token=CFG.net.board_tokens.get(bid),
+                              awaiting_connection=not online,
+                              last_error=(failure or {}).get("reason"),
+                              last_error_detail=(failure or {}).get("detail"),
+                              last_error_ts=(failure or {}).get("ts"),
+                              last_error_ip=(failure or {}).get("ip")).model_dump())
+        seen.add(bid)
+    for bid, conn in BOARDS.items():
+        if bid in seen:
+            continue
+        failure = BOARD_FAILURES.get(bid)
+        out.append(BoardsView(board_id=bid, name=conn.name, kind=conn.kind, online=True,
+                              last_ip=conn.ip, last_seen=conn.last_seen, rssi=conn.rssi,
+                              fw=conn.fw, mac=conn.mac, uptime_s=conn.uptime_s,
+                              ws_url=f"{scheme_host}/ws/board/{bid}?token=<unknown>", token=CFG.net.board_tokens.get(bid),
+                              awaiting_connection=False,
+                              last_error=(failure or {}).get("reason"),
+                              last_error_detail=(failure or {}).get("detail"),
+                              last_error_ts=(failure or {}).get("ts"),
+                              last_error_ip=(failure or {}).get("ip")).model_dump())
+        seen.add(bid)
+    for bid, failure in BOARD_FAILURES.items():
+        if bid in seen:
+            continue
+        out.append(BoardsView(board_id=bid, name=bid, kind="UNKNOWN", online=False,
+                              last_ip=failure.get("ip"), last_seen=None, rssi=None,
+                              fw=None, mac=None, uptime_s=None,
+                              ws_url=f"{scheme_host}/ws/board/{bid}", token=CFG.net.board_tokens.get(bid),
+                              awaiting_connection=True,
+                              last_error=failure.get("reason"),
+                              last_error_detail=failure.get("detail"),
+                              last_error_ts=failure.get("ts"),
+                              last_error_ip=failure.get("ip")).model_dump())
     return {"boards": out}
 
 # ---------- History & Events ----------
@@ -525,6 +582,15 @@ class WSConn:
     def __init__(self, ws:WebSocket, board_id:str, kind:str, name:str, ip:str):
         self.ws=ws; self.board_id=board_id; self.kind=kind; self.name=name; self.ip=ip; self.last_seen=time.time(); self.rssi=None; self.fw=None; self.mac=None; self.uptime_s=None
 BOARDS: Dict[str, WSConn] = {}
+BOARD_FAILURES: Dict[str, Dict[str, Any]] = {}
+
+def record_board_failure(board_id: str, reason: str, ip: str, detail: Optional[str] = None):
+    BOARD_FAILURES[board_id] = {
+        "reason": reason,
+        "ip": ip,
+        "detail": detail,
+        "ts": time.time(),
+    }
 
 @app.websocket("/ws/board/{board_id}")
 async def ws_board(websocket:WebSocket, board_id:str):
@@ -533,14 +599,36 @@ async def ws_board(websocket:WebSocket, board_id:str):
     try:
         msg = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
     except Exception:
-        await websocket.close(code=4400); log_event(f"WS {board_id} no_hello"); return
+        record_board_failure(board_id, "no_hello", ip, "client did not send hello within timeout")
+        log_event(f"WS {board_id} no_hello from {ip}")
+        try:
+            await websocket.close(code=4400, reason="hello timeout")
+        except Exception:
+            pass
+        return
     if msg.get("type")!="hello":
-        await websocket.close(code=4400); log_event(f"WS {board_id} bad_hello"); return
+        detail = f"type={msg.get('type')}"
+        record_board_failure(board_id, "bad_hello", ip, detail)
+        try:
+            await websocket.send_json({"type": "error", "code": 4400, "reason": "expected hello"})
+        except Exception:
+            pass
+        await websocket.close(code=4400, reason="invalid hello")
+        log_event(f"WS {board_id} bad_hello from {ip} {detail}")
+        return
     token = msg.get("token",""); expected = CFG.net.board_tokens.get(board_id)
     if expected is None and CFG.net.board_auto_register:
         CFG.net.board_tokens[board_id]=token; save_json(CFG_PATH, json.loads(CFG.model_dump_json())); expected=token; log_event(f"auto-registered {board_id}")
     if token != expected:
-        await websocket.close(code=4401); log_event(f"WS {board_id} token_mismatch"); return
+        record_board_failure(board_id, "token_mismatch", ip, "provided token does not match configuration")
+        try:
+            await websocket.send_json({"type": "error", "code": 4401, "reason": "token mismatch"})
+        except Exception:
+            pass
+        await websocket.close(code=4401, reason="token mismatch")
+        log_event(f"WS {board_id} token_mismatch from {ip}")
+        return
+    BOARD_FAILURES.pop(board_id, None)
     conn = WSConn(websocket, board_id, msg.get("kind","UNKNOWN"), msg.get("name",board_id), ip)
     conn.fw = msg.get("fw")
     conn.mac = msg.get("mac")
@@ -554,7 +642,19 @@ async def ws_board(websocket:WebSocket, board_id:str):
         conn.uptime_s = None
     BOARDS[board_id] = conn
     cache = load_json(BOARDS_CACHE_PATH, {}); cache[board_id]={"name":conn.name,"kind":conn.kind,"ip":ip,"last_seen":time.time()}; save_json(BOARDS_CACHE_PATH, cache)
-    log_event(f"WS accepted {board_id} {conn.kind}")
+    log_event(f"WS accepted {board_id} {conn.kind} from {ip}")
+    try:
+        await websocket.send_json({
+            "type": "hello:ack",
+            "status": "ok",
+            "board_id": board_id,
+            "server": app.title,
+            "server_version": app.version,
+            "server_time": time.time(),
+            "message": "authenticated",
+        })
+    except Exception as e:
+        log_event(f"WS ack send err {board_id}: {e}")
     # Update cache metadata
     try:
         cache = load_json(BOARDS_CACHE_PATH, {})
