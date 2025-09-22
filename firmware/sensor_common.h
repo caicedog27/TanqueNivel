@@ -77,6 +77,7 @@ void resetWindow();
 void resetFilterState();
 void beginSensorInterface();
 void triggerSensorPulse();
+void wsSendJson(DynamicJsonDocument &doc);
 
 void publishSensorHealth(SensorHealthState state, const char* reason){
   if(!wsReadyForSamples){
