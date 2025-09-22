@@ -27,15 +27,24 @@ void loop(){
   }
   if(millis() - last_send_ms >= 1000){
     if(wCount > 0){
-      float filt = filteredValue();
-      if(wsReadyForSamples){
-        sendSample(SENSOR_ID, filt);
-        Serial.printf("[DATA] Sent filtered level: %.1f mm\n", filt);
+      uint32_t age = (lastSensorRead_ms == 0) ? 0 : (millis() - lastSensorRead_ms);
+      if(sensorDataFresh(sensorTimeout_ms * 2)){
+        float filt = filteredValue();
+        if(wsReadyForSamples){
+          sendSample(SENSOR_ID, filt);
+          Serial.printf("[DATA] Sent filtered level: %.1f mm\n", filt);
+        } else {
+          static uint32_t lastHandshakeLog = 0;
+          if(millis() - lastHandshakeLog > 5000){
+            Serial.println("[WS] Waiting for handshake before sending samples");
+            lastHandshakeLog = millis();
+          }
+        }
       } else {
-        static uint32_t lastHandshakeLog = 0;
-        if(millis() - lastHandshakeLog > 5000){
-          Serial.println("[WS] Waiting for handshake before sending samples");
-          lastHandshakeLog = millis();
+        static uint32_t lastStaleLog = 0;
+        if(millis() - lastStaleLog > 3000){
+          Serial.printf("[DATA] Skipping stale sensor data (age %lu ms)\n", (unsigned long)age);
+          lastStaleLog = millis();
         }
       }
     } else {
