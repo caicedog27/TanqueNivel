@@ -3,6 +3,8 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include "esp_task_wdt.h"
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 
 const char* FW_VERSION = "UX14";
 uint32_t boot_ms = 0;
@@ -190,6 +192,16 @@ void setup(){
   pinMode(PULSE_PIN, OUTPUT); pinMode(AIR_PIN, OUTPUT); pinMode(MAIN_PIN, OUTPUT);
   digitalWrite(PULSE_PIN, LOW); digitalWrite(AIR_PIN, LOW); digitalWrite(MAIN_PIN, LOW);
   Serial.begin(115200);
+  uint32_t serial_wait_start = millis();
+  while(!Serial && (millis() - serial_wait_start) < 1500){ delay(10); }
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if(running){
+    Serial.printf("[Boot] Flash size: %u bytes\n", ESP.getFlashChipSize());
+    Serial.printf("[Boot] Running partition '%s' at 0x%06x with max size %u bytes\n",
+                  running->label, running->address, running->size);
+  } else {
+    Serial.println("[Boot] Unable to read running partition information");
+  }
   setup_wdt(); ensureWiFi(); wsConnect();
   last_runtime_tick = millis();
 }
