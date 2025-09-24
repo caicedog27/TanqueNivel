@@ -1,11 +1,11 @@
 {
-  "ACT-01": {
+  "PLC-01": {
     "name": "Actuador Bomba",
-    "kind": "ACTUATOR",
+    "kind": "PLC",
     "ip": "192.168.1.30",
     "last_seen": 1758136739.2384384,
     "rssi": -69,
-    "fw": "UX14",
+    "fw": "S7-1200",
     "mac": "24:6F:28:C5:F3:90",
     "uptime_s": 1
   }

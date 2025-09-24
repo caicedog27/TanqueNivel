@@ -6,6 +6,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field, field_validator
+from plc_actuator import (
+    PlcActuatorConfig,
+    PlcActuatorError,
+    PlcAddress,
+    S7ActuatorClient,
+)
 
 APP_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(APP_DIR, ".."))
@@ -60,18 +66,46 @@ class HopperCfg(BaseModel):
 class NetCfg(BaseModel):
     allowed_origins: List[str] = Field(default_factory=lambda: ["http://192.168.1.68:8000","http://localhost:8000","http://127.0.0.1:8000"])
     board_tokens: Dict[str,str] = Field(default_factory=lambda: {
-        "ACT-01": "test_ws_board_2025_ABCDEF",
+        "PLC-01": "test_ws_board_2025_ABCDEF",
         "SENS_TANQUE": "test_ws_board_2025_ABCDEF",
         "SENS_TOLVA": "test_ws_board_2025_ABCDEF",
     })
     board_auto_register: bool = True
     api_key: str = "DEVKEY123"
 
+class PlcAddressCfg(BaseModel):
+    db: int = Field(1, ge=1, le=65535)
+    start: int = Field(0, ge=0, le=65535)
+    bit: Optional[int] = Field(None, ge=0, le=7)
+
+class PlcCfg(BaseModel):
+    host: str = ""
+    rack: int = Field(0, ge=0, le=7)
+    slot: int = Field(1, ge=0, le=7)
+    pump: PlcAddressCfg = Field(default_factory=lambda: PlcAddressCfg(db=1, start=0, bit=0))
+    duty_on: PlcAddressCfg = Field(default_factory=lambda: PlcAddressCfg(db=1, start=2))
+    duty_off: PlcAddressCfg = Field(default_factory=lambda: PlcAddressCfg(db=1, start=6))
+    heartbeat: Optional[PlcAddressCfg] = Field(default_factory=lambda: PlcAddressCfg(db=1, start=10))
+    heartbeat_interval_s: float = Field(5.0, ge=1.0, le=300.0)
+
+def build_plc_config(cfg: PlcCfg) -> PlcActuatorConfig:
+    return PlcActuatorConfig(
+        host=cfg.host,
+        rack=cfg.rack,
+        slot=cfg.slot,
+        pump_address=PlcAddress(**cfg.pump.model_dump()),
+        duty_on_address=PlcAddress(**cfg.duty_on.model_dump()),
+        duty_off_address=PlcAddress(**cfg.duty_off.model_dump()),
+        heartbeat_address=PlcAddress(**cfg.heartbeat.model_dump()) if cfg.heartbeat else None,
+        heartbeat_interval_s=cfg.heartbeat_interval_s,
+    )
+
 class AppCfg(BaseModel):
     tank: TankCfg = Field(default_factory=TankCfg)
     hopper: HopperCfg = Field(default_factory=HopperCfg)
     auto: AutoCfg = Field(default_factory=AutoCfg)
     net: NetCfg = Field(default_factory=NetCfg)
+    plc: PlcCfg = Field(default_factory=PlcCfg)
 
 class SensorState(BaseModel):
     raw_mm: float = 0.0
@@ -88,7 +122,7 @@ class AutoModel(BaseModel):
     ema_overshoot_pct: float = 0.0
 
 class ActuatorState(BaseModel):
-    board_id: str = "ACT-01"
+    board_id: str = "PLC-01"
     pump_on: bool = False
     on_ms: int = 100
     off_ms: int = 233
@@ -96,6 +130,8 @@ class ActuatorState(BaseModel):
     runtime_ms_total: int = 0
     last_command_ts: float = 0.0
     ttl_ms: int = 30000
+    plc_connected: bool = False
+    plc_last_error: Optional[str] = None
 
 class BoardsView(BaseModel):
     board_id: str
@@ -142,10 +178,87 @@ def persist_auto_model():
         log_event(f"auto_model save err {e}")
 
 STATE = AppState()
+PLC_CLIENT = S7ActuatorClient(build_plc_config(CFG.plc))
 
 SENSOR_WARNING_AGE_S = 6.0
 SENSOR_FAULT_AGE_S = 12.0
 VALID_SENSOR_STATUS = {"OK", "WARNING", "FAULT", "UNKNOWN"}
+
+async def send_plc_duty(on_ms: int, off_ms: int, context: str, strict: bool = True) -> bool:
+    if not PLC_CLIENT.enabled:
+        err = "PLC S7-1200 no configurado"
+        STATE.actuator.plc_connected = False
+        STATE.actuator.plc_last_error = err
+        if strict:
+            raise PlcActuatorError(err)
+        log_event(f"{context}: {err}")
+        return False
+    try:
+        await PLC_CLIENT.set_duty(on_ms, off_ms)
+        STATE.actuator.plc_connected = True
+        STATE.actuator.plc_last_error = None
+        return True
+    except PlcActuatorError as e:
+        STATE.actuator.plc_connected = False
+        STATE.actuator.plc_last_error = str(e)
+        if strict:
+            raise
+        log_event(f"PLC duty error ({context}): {e}")
+        return False
+    except Exception as e:  # pragma: no cover - defensivo
+        STATE.actuator.plc_connected = False
+        STATE.actuator.plc_last_error = str(e)
+        if strict:
+            raise PlcActuatorError(str(e)) from e
+        log_event(f"PLC duty error inesperado ({context}): {e}")
+        return False
+
+async def send_plc_pump(on: bool, context: str, strict: bool = True) -> bool:
+    if not PLC_CLIENT.enabled:
+        err = "PLC S7-1200 no configurado"
+        STATE.actuator.plc_connected = False
+        STATE.actuator.plc_last_error = err
+        if strict:
+            raise PlcActuatorError(err)
+        log_event(f"{context}: {err}")
+        return False
+    try:
+        await PLC_CLIENT.set_pump(on)
+        STATE.actuator.plc_connected = True
+        STATE.actuator.plc_last_error = None
+        return True
+    except PlcActuatorError as e:
+        STATE.actuator.plc_connected = False
+        STATE.actuator.plc_last_error = str(e)
+        if strict:
+            raise
+        log_event(f"PLC pump error ({context}): {e}")
+        return False
+    except Exception as e:  # pragma: no cover - defensivo
+        STATE.actuator.plc_connected = False
+        STATE.actuator.plc_last_error = str(e)
+        if strict:
+            raise PlcActuatorError(str(e)) from e
+        log_event(f"PLC pump error inesperado ({context}): {e}")
+        return False
+
+async def plc_heartbeat_once() -> None:
+    if not PLC_CLIENT.enabled:
+        STATE.actuator.plc_connected = False
+        STATE.actuator.plc_last_error = "PLC S7-1200 no configurado"
+        return
+    try:
+        await PLC_CLIENT.heartbeat()
+        STATE.actuator.plc_connected = True
+        STATE.actuator.plc_last_error = None
+    except PlcActuatorError as e:
+        STATE.actuator.plc_connected = False
+        STATE.actuator.plc_last_error = str(e)
+        log_event(f"PLC heartbeat error: {e}")
+    except Exception as e:  # pragma: no cover - defensivo
+        STATE.actuator.plc_connected = False
+        STATE.actuator.plc_last_error = str(e)
+        log_event(f"PLC heartbeat error inesperado: {e}")
 
 def load_auto_model_state():
     data = load_json(AUTO_MODEL_PATH, None)
@@ -194,6 +307,7 @@ def sensor_label(sensor_id: Optional[str]) -> str:
 async def force_pump_off(reason: str, log_msg: Optional[str] = None) -> bool:
     if not STATE.actuator.pump_on:
         return False
+    await send_plc_pump(False, f"force:{reason}", strict=False)
     STATE.actuator.pump_on = False
     STATE.actuator.last_command_ts = time.time()
     auto_learn_pump_off(reason)
@@ -483,6 +597,10 @@ class DutyReq(BaseModel):
 
 @app.post("/api/actuator/duty")
 async def api_duty(req:DutyReq, _:bool=Depends(require_api_key)):
+    try:
+        await send_plc_duty(req.on_ms, req.off_ms, "api:duty", strict=True)
+    except PlcActuatorError as e:
+        raise HTTPException(503, f"PLC no disponible: {e}")
     STATE.actuator.on_ms = req.on_ms
     STATE.actuator.off_ms = req.off_ms
     if STATE.actuator.board_id in BOARDS:
@@ -499,10 +617,15 @@ class PumpReq(BaseModel):
 async def api_pump(req:PumpReq, _:bool=Depends(require_api_key)):
     v=req.value.upper().strip()
     if v not in ("ON","OFF"): raise HTTPException(400,"value debe ser ON/OFF")
-    STATE.actuator.pump_on = (v=="ON")
+    target_on = (v == "ON")
+    try:
+        await send_plc_pump(target_on, f"api:pump:{req.reason}", strict=True)
+    except PlcActuatorError as e:
+        raise HTTPException(503, f"PLC no disponible: {e}")
+    STATE.actuator.pump_on = target_on
     STATE.actuator.last_command_ts = time.time()
     STATE.actuator.ttl_ms = req.ttl_ms
-    if v == "ON":
+    if target_on:
         auto_learn_pump_on(req.reason or "manual")
     else:
         auto_learn_pump_off(req.reason or "manual")
@@ -516,9 +639,11 @@ async def api_mode(mode:str, _:bool=Depends(require_api_key)):
     mode=mode.upper()
     if mode not in ("AUTO","MANUAL_OFF"): raise HTTPException(400,"modo inválido")
     STATE.mode = mode
-    if mode=="MANUAL_OFF" and STATE.actuator.board_id in BOARDS:
+    if mode=="MANUAL_OFF":
         auto_learn_pump_off("mode_change")
-        await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
+        await send_plc_pump(False, "mode_change", strict=False)
+        if STATE.actuator.board_id in BOARDS:
+            await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
     log_event(f"mode set {mode}")
     return {"ok": True, "trace": int(time.time()*1000)}
 
@@ -539,6 +664,10 @@ async def profiles_apply(name:str, _:bool=Depends(require_api_key)):
     data = load_json(PROFILES_PATH, {"profiles":[]})
     for p in data["profiles"]:
         if p["name"]==name:
+            try:
+                await send_plc_duty(int(p["on_ms"]), int(p["off_ms"]), f"profile:{name}", strict=True)
+            except PlcActuatorError as e:
+                raise HTTPException(503, f"PLC no disponible: {e}")
             STATE.actuator.on_ms=int(p["on_ms"]); STATE.actuator.off_ms=int(p["off_ms"])
             if STATE.actuator.board_id in BOARDS:
                 await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:set","on_ms":STATE.actuator.on_ms,"off_ms":STATE.actuator.off_ms})
@@ -559,6 +688,7 @@ class PatchCfg(BaseModel):
     hopper: Optional[Dict[str, Any]] = None
     tank: Optional[Dict[str, Any]] = None
     auto: Optional[Dict[str, Any]] = None
+    plc: Optional[Dict[str, Any]] = None
 
 @app.patch("/api/config")
 async def patch_cfg(req:PatchCfg, _:bool=Depends(require_api_key)):
@@ -573,6 +703,22 @@ async def patch_cfg(req:PatchCfg, _:bool=Depends(require_api_key)):
         cal = CFG.tank.cal.model_dump(); cal.update(req.tank.get("cal", {})); CFG.tank.cal = SensorCal(**cal); changes.append("tank.cal")
     if req.auto:
         a = CFG.auto.model_dump(); a.update(req.auto); CFG.auto = AutoCfg(**a); changes.append("auto")
+    if req.plc is not None:
+        plc_data = CFG.plc.model_dump()
+        for key, value in req.plc.items():
+            if key in ("pump", "duty_on", "duty_off", "heartbeat"):
+                if value is None:
+                    plc_data[key] = None
+                else:
+                    base = plc_data.get(key) or {}
+                    base.update(value)
+                    plc_data[key] = base
+            else:
+                plc_data[key] = value
+        CFG.plc = PlcCfg(**plc_data)
+        PLC_CLIENT.update_config(build_plc_config(CFG.plc))
+        await plc_heartbeat_once()
+        changes.append("plc")
     save_json(CFG_PATH, json.loads(CFG.model_dump_json()))
     log_event("config patched: " + ",".join(changes))
     return {"ok":True,"trace":int(time.time()*1000)}
@@ -709,6 +855,12 @@ async def ws_board(websocket:WebSocket, board_id:str):
         BOARDS.pop(board_id, None); log_event(f"WS closed {board_id}")
 
 # ---------- Background ----------
+async def plc_monitor_loop():
+    while True:
+        interval = clamp(CFG.plc.heartbeat_interval_s, 1.0, 300.0)
+        await asyncio.sleep(interval)
+        await plc_heartbeat_once()
+
 async def history_loop():
     last_p=0; last_r=0
     while True:
@@ -753,20 +905,22 @@ async def history_loop():
                 tank_ok = False
             if tank_ok and STATE.hopper.filtered_pct < (targ - hyst):
                 if not STATE.actuator.pump_on:
-                    STATE.actuator.pump_on=True; STATE.actuator.last_command_ts=time.time()
-                    auto_learn_pump_on("auto")
-                    if STATE.actuator.board_id in BOARDS:
-                        try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"ON"})
-                        except: pass
-                    log_event("AUTO: pump ON")
+                    if await send_plc_pump(True, "auto_on", strict=False):
+                        STATE.actuator.pump_on=True; STATE.actuator.last_command_ts=time.time()
+                        auto_learn_pump_on("auto")
+                        if STATE.actuator.board_id in BOARDS:
+                            try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"ON"})
+                            except: pass
+                        log_event("AUTO: pump ON")
             if STATE.hopper.filtered_pct >= (targ + guard):
                 if STATE.actuator.pump_on:
-                    STATE.actuator.pump_on=False
-                    auto_learn_pump_off("auto")
-                    if STATE.actuator.board_id in BOARDS:
-                        try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
-                        except: pass
-                    log_event("AUTO: pump OFF")
+                    if await send_plc_pump(False, "auto_off", strict=False):
+                        STATE.actuator.pump_on=False
+                        auto_learn_pump_off("auto")
+                        if STATE.actuator.board_id in BOARDS:
+                            try: await BOARDS[STATE.actuator.board_id].ws.send_json({"type":"actuator:pump","value":"OFF"})
+                            except: pass
+                        log_event("AUTO: pump OFF")
         if STATE.actuator.pump_on:
             auto_learn_track_progress()
 
@@ -781,5 +935,7 @@ async def on_start():
     ]:
         if not os.path.exists(p):
             with open(p,"w",encoding="utf-8") as f: f.write(init)
+    asyncio.create_task(plc_monitor_loop())
     asyncio.create_task(history_loop())
+    await plc_heartbeat_once()
     log_event("server started")
