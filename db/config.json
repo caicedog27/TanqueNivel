@@ -27,11 +27,34 @@
       "http://127.0.0.1:8000"
     ],
     "board_tokens": {
-      "ACT-01": "test_ws_board_2025_ABCDEF",
       "SENS_TANQUE": "test_ws_board_2025_ABCDEF",
-      "SENS_TOLVA": "test_ws_board_2025_ABCDEF"
+      "SENS_TOLVA": "test_ws_board_2025_ABCDEF",
+      "PLC-01": "test_ws_board_2025_ABCDEF"
     },
     "board_auto_register": true,
     "api_key": "DEVKEY123"
+  },
+  "plc": {
+    "host": "192.168.0.10",
+    "rack": 0,
+    "slot": 1,
+    "pump": {
+      "db": 1,
+      "start": 0,
+      "bit": 0
+    },
+    "duty_on": {
+      "db": 1,
+      "start": 2
+    },
+    "duty_off": {
+      "db": 1,
+      "start": 6
+    },
+    "heartbeat": {
+      "db": 1,
+      "start": 10
+    },
+    "heartbeat_interval_s": 5.0
   }
 }
